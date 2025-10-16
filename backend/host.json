@@ -8,8 +8,19 @@
       }
     }
   },
+  "extensions": {
+    "http": {
+      "routePrefix": "api"
+    },
+    "durableTask": {
+      "hubName": "WireGuardHub",
+      "storageProvider": {
+        "type": "azure_storage"
+      }
+    }
+  },
   "extensionBundle": {
     "id": "Microsoft.Azure.Functions.ExtensionBundle",
-    "version": "[3.*, 4.0.0)"
+    "version": "[4.*, 5.0.0)"
   }
 }

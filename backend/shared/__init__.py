@@ -1,1 +1,1 @@
-# Shared utilities for WireGuard backend
+# Shared utilities for WireGuard Functions backend

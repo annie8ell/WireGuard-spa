@@ -1,35 +1,61 @@
-"""Authentication utilities for WireGuard backend."""
+"""
+Authentication and authorization utilities for Azure Static Web Apps.
+"""
+import base64
 import json
-from .config import get_allowed_emails
+import os
+import logging
+from typing import Optional
 
-def validate_user(req):
+logger = logging.getLogger(__name__)
+
+
+def get_allowed_emails() -> list:
     """
-    Validate user authentication from Azure Static Web Apps.
-    Returns tuple (is_valid, user_email, error_message).
+    Get the list of allowed email addresses from environment variable.
+    Falls back to seed list if not configured.
     """
-    # Check for the StaticWebApps authentication header
-    client_principal_header = req.headers.get('x-ms-client-principal')
+    allowed_emails_str = os.environ.get('ALLOWED_EMAILS', 'annie8ell@gmail.com')
+    return [email.strip() for email in allowed_emails_str.split(',')]
+
+
+def validate_user(req) -> tuple[bool, Optional[str], Optional[str]]:
+    """
+    Validates the user by decoding the X-MS-CLIENT-PRINCIPAL header
+    and checking against the allowlist.
     
-    if not client_principal_header:
-        return False, None, "No authentication header found"
-    
+    Returns:
+        tuple: (is_valid, email, error_message)
+    """
     try:
-        # Decode the base64 encoded JSON
-        import base64
-        decoded = base64.b64decode(client_principal_header)
-        principal = json.loads(decoded)
+        # Get the X-MS-CLIENT-PRINCIPAL header
+        principal_header = req.headers.get('X-MS-CLIENT-PRINCIPAL')
         
-        user_email = principal.get('userDetails', '').lower()
+        if not principal_header:
+            logger.warning('No X-MS-CLIENT-PRINCIPAL header found')
+            return False, None, 'Authentication required'
+        
+        # Decode the base64 JSON payload
+        principal_json = base64.b64decode(principal_header).decode('utf-8')
+        principal_data = json.loads(principal_json)
+        
+        # Extract user email
+        user_email = principal_data.get('userDetails')
         
         if not user_email:
-            return False, None, "No email found in authentication"
+            logger.warning('No userDetails in principal data')
+            return False, None, 'User email not found'
         
-        allowed_emails = [email.lower() for email in get_allowed_emails()]
+        # Check allowlist
+        allowed_emails = get_allowed_emails()
         
         if user_email not in allowed_emails:
-            return False, user_email, f"User {user_email} is not authorized"
+            logger.warning(f'User {user_email} not in allowlist')
+            return False, user_email, f'User {user_email} is not authorized'
         
+        logger.info(f'User {user_email} validated successfully')
         return True, user_email, None
         
     except Exception as e:
-        return False, None, f"Authentication error: {str(e)}"
+        logger.error(f'Error validating user: {str(e)}')
+        return False, None, f'Authentication error: {str(e)}'

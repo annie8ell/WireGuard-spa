@@ -3,10 +3,12 @@
   "Values": {
     "AzureWebJobsStorage": "UseDevelopmentStorage=true",
     "FUNCTIONS_WORKER_RUNTIME": "python",
-    "ALLOWED_EMAILS": "awwsawws@gmail.com,awwsawws@hotmail.com",
-    "DRY_RUN": "true",
-    "BACKEND_MODE": "vm",
-    "AZURE_SUBSCRIPTION_ID": "",
-    "AZURE_RESOURCE_GROUP": ""
+    "AZURE_SUBSCRIPTION_ID": "your-subscription-id",
+    "AZURE_RESOURCE_GROUP": "your-resource-group",
+    "AZURE_LOCATION": "eastus",
+    "ADMIN_USERNAME": "azureuser",
+    "SSH_PRIVATE_KEY_B64": "base64-encoded-private-key",
+    "ALLOWED_EMAILS": "annie8ell@gmail.com",
+    "DRY_RUN": "true"
   }
 }
