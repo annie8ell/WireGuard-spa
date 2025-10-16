@@ -33,25 +33,58 @@ jobs:
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
 
-      - name: Create Resource Group
+      - name: Check or Create Resource Group and Validate Location
+        id: check-rg
         run: |
-          az group create --name ${{ env.RESOURCE_GROUP }} --location ${{ env.LOCATION }}
+          set -euo pipefail
+          RG="${{ env.RESOURCE_GROUP }}"
+          LOCATION="${{ env.LOCATION }}"
 
-      - name: Deploy Bicep Infrastructure
+          echo "Checking whether resource group '$RG' exists..."
+          EXISTS=$(az group exists --name "$RG" || true)
+
+          if [ "$EXISTS" = "false" ]; then
+            echo "Resource group '$RG' does not exist. Creating in location '$LOCATION'..."
+            az group create --name "$RG" --location "$LOCATION"
+          else
+            CURRENT_LOC=$(az group show --name "$RG" --query location -o tsv || true)
+            if [ -z "$CURRENT_LOC" ]; then
+              echo "ERROR: Unable to determine existing resource group's location for '$RG'." >&2
+              exit 1
+            fi
+
+            # Normalize to lowercase for comparison
+            if [ "$(echo "$CURRENT_LOC" | tr '[:upper:]' '[:lower:]')" != "$(echo "$LOCATION" | tr '[:upper:]' '[:lower:]')" ]; then
+              echo "ERROR: Resource group '$RG' already exists in location '$CURRENT_LOC' but workflow requested '$LOCATION'." >&2
+              echo "To continue, either choose the matching location or use a different resource group name." >&2
+              exit 1
+            fi
+
+            echo "Resource group '$RG' exists in the requested location '$LOCATION'. Continuing."
+          fi
+
+      - name: Deploy Bicep Infrastructure (assumes RG exists)
         id: deploy-infra
         run: |
+          set -euo pipefail
+          # Bicep templates should not create the resource group (deploy into existing RG)
           OUTPUT=$(az deployment group create \
-            --resource-group ${{ env.RESOURCE_GROUP }} \
+            --resource-group "${{ env.RESOURCE_GROUP }}" \
             --template-file infra/main.bicep \
             --parameters projectName=${{ env.PROJECT_NAME }} location=${{ env.LOCATION }} \
             --query 'properties.outputs' -o json)
-          
+
           echo "Deployment outputs: $OUTPUT"
-          
-          FUNCTION_APP_NAME=$(echo $OUTPUT | jq -r '.functionAppName.value')
-          SWA_NAME=$(echo $OUTPUT | jq -r '.staticWebAppName.value')
-          SWA_RESOURCE_ID=$(echo $OUTPUT | jq -r '.staticWebAppResourceId.value')
-          
+
+          FUNCTION_APP_NAME=$(echo "$OUTPUT" | jq -r '.functionAppName.value // empty')
+          SWA_NAME=$(echo "$OUTPUT" | jq -r '.staticWebAppName.value // empty')
+          SWA_RESOURCE_ID=$(echo "$OUTPUT" | jq -r '.staticWebAppResourceId.value // empty')
+
+          if [ -z "$FUNCTION_APP_NAME" ] || [ -z "$SWA_NAME" ]; then
+            echo "ERROR: Expected deployment outputs not found. Check infra/main.bicep outputs." >&2
+            exit 1
+          fi
+
           echo "functionAppName=$FUNCTION_APP_NAME" >> $GITHUB_OUTPUT
           echo "staticWebAppName=$SWA_NAME" >> $GITHUB_OUTPUT
           echo "staticWebAppResourceId=$SWA_RESOURCE_ID" >> $GITHUB_OUTPUT
@@ -59,21 +92,27 @@ jobs:
       - name: Retrieve SWA Deployment Token
         id: swa-token
         run: |
+          set -euo pipefail
+          SWA_NAME="${{ steps.deploy-infra.outputs.staticWebAppName }}"
+          if [ -z "$SWA_NAME" ]; then
+            echo "ERROR: Static Web App name missing from previous step outputs." >&2
+            exit 1
+          fi
           SWA_TOKEN=$(az staticwebapp secrets list \
-            --name ${{ steps.deploy-infra.outputs.staticWebAppName }} \
-            --resource-group ${{ env.RESOURCE_GROUP }} \
+            --name "$SWA_NAME" \
+            --resource-group "${{ env.RESOURCE_GROUP }}" \
             --query 'properties.apiKey' -o tsv)
-          
           echo "::add-mask::$SWA_TOKEN"
           echo "token=$SWA_TOKEN" >> $GITHUB_OUTPUT
 
       - name: Setup Python
         uses: actions/setup-python@v4
         with:
-          python-version: '3.9'
+          python-version: '3.10'
 
       - name: Install Backend Dependencies and Create Zip
         run: |
+          set -euo pipefail
           cd backend
           python -m pip install --upgrade pip
           pip install -r requirements.txt --target .python_packages/lib/site-packages
@@ -81,17 +120,19 @@ jobs:
 
       - name: Deploy Azure Functions via Zip Deploy
         run: |
+          set -euo pipefail
           az functionapp deployment source config-zip \
-            -g ${{ env.RESOURCE_GROUP }} \
-            -n ${{ steps.deploy-infra.outputs.functionAppName }} \
+            -g "${{ env.RESOURCE_GROUP }}" \
+            -n "${{ steps.deploy-infra.outputs.functionAppName }}" \
             --src backend.zip
 
       - name: Configure Function App Settings
         run: |
+          set -euo pipefail
           SUBSCRIPTION_ID=$(az account show --query id -o tsv)
           az functionapp config appsettings set \
-            --name ${{ steps.deploy-infra.outputs.functionAppName }} \
-            --resource-group ${{ env.RESOURCE_GROUP }} \
+            --name "${{ steps.deploy-infra.outputs.functionAppName }}" \
+            --resource-group "${{ env.RESOURCE_GROUP }}" \
             --settings \
               ALLOWED_EMAILS="awwsawws@gmail.com,awwsawws@hotmail.com" \
               DRY_RUN="true" \
@@ -105,7 +146,7 @@ jobs:
           azure_static_web_apps_api_token: ${{ steps.swa-token.outputs.token }}
           repo_token: ${{ secrets.GITHUB_TOKEN }}
           action: 'upload'
-          app_location: '/'
+          app_location: '/' 
           skip_app_build: true
           output_location: '/'
 
