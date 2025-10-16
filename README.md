@@ -2,6 +2,15 @@
 
 A complete infrastructure-as-code solution for deploying a WireGuard VPN service with Azure Static Web Apps and Azure Functions.
 
+## 📚 Documentation
+
+- **[Quick Start Guide](QUICKSTART.md)** - Get started in 15 minutes
+- **[Setup Guide](SETUP.md)** - Detailed setup instructions
+- **[Architecture](ARCHITECTURE.md)** - System design and diagrams
+- **[Contributing](CONTRIBUTING.md)** - Contribution guidelines
+- **[Backend Documentation](backend/README.md)** - Azure Functions details
+- **[Frontend Documentation](frontend/README.md)** - Vue.js SPA details
+
 ## Overview
 
 This project provides:
