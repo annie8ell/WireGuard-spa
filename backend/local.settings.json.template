@@ -1,0 +1,12 @@
+{
+  "IsEncrypted": false,
+  "Values": {
+    "AzureWebJobsStorage": "UseDevelopmentStorage=true",
+    "FUNCTIONS_WORKER_RUNTIME": "python",
+    "ALLOWED_EMAILS": "awwsawws@gmail.com,awwsawws@hotmail.com",
+    "DRY_RUN": "true",
+    "BACKEND_MODE": "vm",
+    "AZURE_SUBSCRIPTION_ID": "",
+    "AZURE_RESOURCE_GROUP": ""
+  }
+}

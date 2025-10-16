@@ -1,0 +1,7 @@
+azure-functions
+azure-durable-functions
+azure-identity
+azure-mgmt-compute
+azure-mgmt-network
+azure-mgmt-resource
+requests
