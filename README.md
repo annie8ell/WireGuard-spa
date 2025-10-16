@@ -41,55 +41,87 @@ WireGuard requires kernel-level TUN/TAP device support which Azure Container Ins
 5. **Resource Group** where VMs will be created
 
 ### Required GitHub Secrets
-- `AZURE_STATIC_WEB_APPS_API_TOKEN` - SWA deployment token
-- `AZURE_FUNCTIONAPP_NAME` - Name of your Function App
-- `AZURE_FUNCTIONAPP_PUBLISH_PROFILE` - Function App publish profile
+- `AZURE_CREDENTIALS` - Service principal credentials for Azure login (JSON format)
 
 ## Setup Instructions
 
-### 1. Create Azure Resources
+### Quick Start with Infrastructure Workflow
 
-#### Create Resource Group
+The easiest way to get started is using the automated infrastructure workflow:
+
+1. **Create Azure Service Principal**
+   ```bash
+   az ad sp create-for-rbac \
+     --name wireguard-spa-deployer \
+     --role Contributor \
+     --scopes /subscriptions/<YOUR_SUBSCRIPTION_ID> \
+     --sdk-auth
+   ```
+   Save the JSON output as the `AZURE_CREDENTIALS` secret in GitHub.
+
+2. **Run the Workflow**
+   - Navigate to **Actions** → **Provision Infrastructure and Deploy**
+   - Click **Run workflow**
+   - Choose location (default: uksouth) and resource group name
+   - The workflow will:
+     - Create all Azure resources
+     - Deploy the Functions backend with DRY_RUN=true
+     - Deploy the SPA
+     - Configure necessary settings automatically
+
+3. **Verify and Test**
+   - Check the workflow summary for deployment details
+   - Verify SWA Backends linking in Azure Portal
+   - Test with DRY_RUN=true (no actual VMs created)
+   - When ready, set DRY_RUN=false via Azure Portal or CLI
+
+### Manual Setup
+
+If you prefer manual setup, follow these steps:
+
+#### 1. Create Azure Resources
+
+##### Create Resource Group
 ```bash
-az group create --name wireguard-rg --location eastus
+az group create --name wireguard-rg --location uksouth
 ```
 
-#### Create Storage Account (for Durable Functions)
+##### Create Storage Account (for Durable Functions)
 ```bash
 az storage account create \
   --name wireguardstorage123 \
   --resource-group wireguard-rg \
-  --location eastus \
+  --location uksouth \
   --sku Standard_LRS
 ```
 
-#### Create Function App
+##### Create Function App
 ```bash
 az functionapp create \
   --name wireguard-functions \
   --resource-group wireguard-rg \
   --storage-account wireguardstorage123 \
-  --consumption-plan-location eastus \
+  --consumption-plan-location uksouth \
   --runtime python \
   --runtime-version 3.10 \
   --functions-version 4 \
   --os-type Linux
 ```
 
-#### Create Static Web App
+##### Create Static Web App
 ```bash
 az staticwebapp create \
   --name wireguard-spa \
   --resource-group wireguard-rg \
-  --location eastus2 \
+  --location uksouth \
   --sku Free
 ```
 
-### 2. Configure Function App Permissions
+#### 2. Configure Function App Permissions
 
 The Function App needs permission to create VMs. Choose one of these options:
 
-#### Option A: Managed Identity (Recommended)
+##### Option A: Managed Identity (Recommended)
 ```bash
 # Enable system-assigned managed identity
 az functionapp identity assign \
@@ -108,7 +140,7 @@ az role assignment create \
   --scope /subscriptions/<YOUR_SUBSCRIPTION_ID>/resourceGroups/wireguard-rg
 ```
 
-#### Option B: Service Principal
+##### Option B: Service Principal
 ```bash
 # Create service principal
 az ad sp create-for-rbac \
@@ -120,7 +152,7 @@ az ad sp create-for-rbac \
 # Set these as Function App settings: AZURE_CLIENT_ID, AZURE_CLIENT_SECRET, AZURE_TENANT_ID
 ```
 
-### 3. Configure Function App Settings
+#### 3. Configure Function App Settings
 
 Set the required application settings:
 
@@ -133,15 +165,14 @@ az functionapp config appsettings set \
   --settings \
     AZURE_SUBSCRIPTION_ID="$SUBSCRIPTION_ID" \
     AZURE_RESOURCE_GROUP="wireguard-rg" \
-    AZURE_LOCATION="eastus" \
     ADMIN_USERNAME="azureuser" \
-    ALLOWED_EMAILS="annie8ell@gmail.com" \
+    ALLOWED_EMAILS="awwsawws@gmail.com,awwsawws@hotmail.com" \
     DRY_RUN="true"
 ```
 
-**Note**: Start with `DRY_RUN=true` to test the flow without creating real VMs.
+**Note**: Start with `DRY_RUN=true` to test the flow without creating real VMs. The automated workflow sets these automatically.
 
-### 4. Link Function App as Backend in Static Web App
+#### 4. Link Function App as Backend in Static Web App
 
 In Azure Portal:
 1. Navigate to your Static Web App
@@ -149,41 +180,38 @@ In Azure Portal:
 3. Click **Link** and select your Function App
 4. Set the API location to `/api`
 
-### 5. Configure GitHub Secrets
+#### 5. Configure GitHub Secrets
 
 In your GitHub repository settings (Settings > Secrets and variables > Actions):
 
-1. **AZURE_STATIC_WEB_APPS_API_TOKEN**
-   ```bash
-   az staticwebapp secrets list \
-     --name wireguard-spa \
-     --resource-group wireguard-rg \
-     --query "properties.apiKey" -o tsv
-   ```
+**AZURE_CREDENTIALS** (required for infrastructure workflow)
+```bash
+az ad sp create-for-rbac \
+  --name wireguard-spa-deployer \
+  --role Contributor \
+  --scopes /subscriptions/<YOUR_SUBSCRIPTION_ID> \
+  --sdk-auth
+```
+Add the entire JSON output as a secret named `AZURE_CREDENTIALS`.
 
-2. **AZURE_FUNCTIONAPP_NAME**
-   - Value: `wireguard-functions` (or your Function App name)
-
-3. **AZURE_FUNCTIONAPP_PUBLISH_PROFILE**
-   ```bash
-   az functionapp deployment list-publishing-profiles \
-     --name wireguard-functions \
-     --resource-group wireguard-rg \
-     --xml
-   ```
-
-### 6. Configure Authentication in Static Web App
+#### 6. Configure Authentication in Static Web App
 
 1. In Azure Portal, go to your Static Web App
 2. Navigate to **Authentication** (or **Configuration** > **Authentication**)
 3. Configure identity providers (Google and/or Microsoft)
 4. Set allowed roles and permissions as needed
 
-### 7. Deploy
+#### 7. Deploy
 
-Push to main branch or trigger workflows manually:
-- The SPA will deploy automatically via `swa-deploy.yml`
-- The Functions will deploy automatically via `functions-deploy.yml`
+**Using the Infrastructure Workflow (Recommended):**
+- Navigate to **Actions** → **Provision Infrastructure and Deploy**
+- Click **Run workflow** and select your parameters
+- The workflow is **manual-only** (no automatic triggers on push)
+- It will create all resources, deploy backend and frontend automatically
+
+**Using Individual Workflows (Alternative):**
+- The SPA can deploy via `swa-deploy.yml`
+- The Functions can deploy via `functions-deploy.yml`
 
 ## Usage
 
@@ -217,6 +245,13 @@ This is perfect for:
 
 Once you've tested with `DRY_RUN=true`, enable real VM provisioning:
 
+**Via Azure Portal:**
+1. Navigate to your Function App
+2. Go to Configuration → Application Settings
+3. Change `DRY_RUN` to `false`
+4. Click Save and restart the Function App
+
+**Via Azure CLI:**
 ```bash
 az functionapp config appsettings set \
   --name wireguard-functions \
@@ -224,10 +259,11 @@ az functionapp config appsettings set \
   --settings DRY_RUN="false"
 ```
 
-**Important**: You'll also need to:
-1. Set up SSH key management (currently uses placeholder)
-2. Implement the actual WireGuard server configuration on the VM
-3. Test the complete flow end-to-end
+**Important**: Before switching to production, ensure:
+1. SSH key management is configured (currently uses placeholder)
+2. The actual WireGuard server configuration is implemented on the VM
+3. You've tested the complete flow end-to-end
+4. You understand the cost implications of running VMs
 
 ## Development
 
