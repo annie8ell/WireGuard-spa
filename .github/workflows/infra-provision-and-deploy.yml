@@ -10,18 +10,15 @@ on:
       location:
         description: 'Azure region for resources'
         required: true
-        default: 'eastus'
+        default: 'uksouth'
       projectName:
         description: 'Project name prefix (lowercase, no spaces)'
         required: true
         default: 'wgspa'
-  push:
-    branches:
-      - main
 
 env:
   RESOURCE_GROUP: ${{ github.event.inputs.resourceGroupName || 'wireguard-spa-rg' }}
-  LOCATION: ${{ github.event.inputs.location || 'eastus' }}
+  LOCATION: ${{ github.event.inputs.location || 'uksouth' }}
   PROJECT_NAME: ${{ github.event.inputs.projectName || 'wgspa' }}
 
 jobs:
@@ -46,7 +43,7 @@ jobs:
           OUTPUT=$(az deployment group create \
             --resource-group ${{ env.RESOURCE_GROUP }} \
             --template-file infra/main.bicep \
-            --parameters projectName=${{ env.PROJECT_NAME }} \
+            --parameters projectName=${{ env.PROJECT_NAME }} location=${{ env.LOCATION }} \
             --query 'properties.outputs' -o json)
           
           echo "Deployment outputs: $OUTPUT"
@@ -75,18 +72,32 @@ jobs:
         with:
           python-version: '3.9'
 
-      - name: Install Backend Dependencies
+      - name: Install Backend Dependencies and Create Zip
         run: |
           cd backend
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
+          pip install -r requirements.txt --target .python_packages/lib/site-packages
+          zip -r ../backend.zip . -x "*.pyc" "__pycache__/*" "venv/*" ".venv/*" "*/.git/*"
 
-      - name: Deploy Azure Functions
-        uses: Azure/functions-action@v1
-        with:
-          app-name: ${{ steps.deploy-infra.outputs.functionAppName }}
-          package: backend
-          publish-profile: ${{ secrets.AZURE_FUNCTIONAPP_PUBLISH_PROFILE }}
+      - name: Deploy Azure Functions via Zip Deploy
+        run: |
+          az functionapp deployment source config-zip \
+            -g ${{ env.RESOURCE_GROUP }} \
+            -n ${{ steps.deploy-infra.outputs.functionAppName }} \
+            --src backend.zip
+
+      - name: Configure Function App Settings
+        run: |
+          SUBSCRIPTION_ID=$(az account show --query id -o tsv)
+          az functionapp config appsettings set \
+            --name ${{ steps.deploy-infra.outputs.functionAppName }} \
+            --resource-group ${{ env.RESOURCE_GROUP }} \
+            --settings \
+              ALLOWED_EMAILS="awwsawws@gmail.com,awwsawws@hotmail.com" \
+              DRY_RUN="true" \
+              ADMIN_USERNAME="azureuser" \
+              AZURE_SUBSCRIPTION_ID="$SUBSCRIPTION_ID" \
+              AZURE_RESOURCE_GROUP="${{ env.RESOURCE_GROUP }}"
 
       - name: Build and Deploy Static Web App
         uses: Azure/static-web-apps-deploy@v1
@@ -94,17 +105,23 @@ jobs:
           azure_static_web_apps_api_token: ${{ steps.swa-token.outputs.token }}
           repo_token: ${{ secrets.GITHUB_TOKEN }}
           action: 'upload'
-          app_location: '/frontend'
-          output_location: 'dist'
+          app_location: '/'
+          skip_app_build: true
+          output_location: '/'
 
       - name: Deployment Summary
         run: |
           echo "### Deployment Complete! 🚀" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Resource Group:** ${{ env.RESOURCE_GROUP }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Location:** ${{ env.LOCATION }}" >> $GITHUB_STEP_SUMMARY
           echo "**Function App:** ${{ steps.deploy-infra.outputs.functionAppName }}" >> $GITHUB_STEP_SUMMARY
           echo "**Static Web App:** ${{ steps.deploy-infra.outputs.staticWebAppName }}" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**Next Steps:**" >> $GITHUB_STEP_SUMMARY
-          echo "1. Configure SWA backend in Azure Portal (Backends blade)" >> $GITHUB_STEP_SUMMARY
-          echo "2. Link Function App as backend API" >> $GITHUB_STEP_SUMMARY
-          echo "3. Configure authentication providers in SWA" >> $GITHUB_STEP_SUMMARY
+          echo "1. Verify SWA Backends linking in Azure Portal:" >> $GITHUB_STEP_SUMMARY
+          echo "   - Navigate to Static Web App → APIs/Backends blade" >> $GITHUB_STEP_SUMMARY
+          echo "   - Link Function App as backend API with path /api" >> $GITHUB_STEP_SUMMARY
+          echo "2. Configure authentication providers in SWA (Google/Microsoft)" >> $GITHUB_STEP_SUMMARY
+          echo "3. Test deployment with DRY_RUN=true (currently set)" >> $GITHUB_STEP_SUMMARY
+          echo "4. When ready, set DRY_RUN=false to enable actual VM provisioning" >> $GITHUB_STEP_SUMMARY
