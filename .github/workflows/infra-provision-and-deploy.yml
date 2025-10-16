@@ -1,0 +1,110 @@
+name: Provision Infrastructure and Deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      resourceGroupName:
+        description: 'Azure Resource Group name'
+        required: true
+        default: 'wireguard-spa-rg'
+      location:
+        description: 'Azure region for resources'
+        required: true
+        default: 'eastus'
+      projectName:
+        description: 'Project name prefix (lowercase, no spaces)'
+        required: true
+        default: 'wgspa'
+  push:
+    branches:
+      - main
+
+env:
+  RESOURCE_GROUP: ${{ github.event.inputs.resourceGroupName || 'wireguard-spa-rg' }}
+  LOCATION: ${{ github.event.inputs.location || 'eastus' }}
+  PROJECT_NAME: ${{ github.event.inputs.projectName || 'wgspa' }}
+
+jobs:
+  provision-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Azure Login
+        uses: azure/login@v1
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Create Resource Group
+        run: |
+          az group create --name ${{ env.RESOURCE_GROUP }} --location ${{ env.LOCATION }}
+
+      - name: Deploy Bicep Infrastructure
+        id: deploy-infra
+        run: |
+          OUTPUT=$(az deployment group create \
+            --resource-group ${{ env.RESOURCE_GROUP }} \
+            --template-file infra/main.bicep \
+            --parameters projectName=${{ env.PROJECT_NAME }} \
+            --query 'properties.outputs' -o json)
+          
+          echo "Deployment outputs: $OUTPUT"
+          
+          FUNCTION_APP_NAME=$(echo $OUTPUT | jq -r '.functionAppName.value')
+          SWA_NAME=$(echo $OUTPUT | jq -r '.staticWebAppName.value')
+          SWA_RESOURCE_ID=$(echo $OUTPUT | jq -r '.staticWebAppResourceId.value')
+          
+          echo "functionAppName=$FUNCTION_APP_NAME" >> $GITHUB_OUTPUT
+          echo "staticWebAppName=$SWA_NAME" >> $GITHUB_OUTPUT
+          echo "staticWebAppResourceId=$SWA_RESOURCE_ID" >> $GITHUB_OUTPUT
+
+      - name: Retrieve SWA Deployment Token
+        id: swa-token
+        run: |
+          SWA_TOKEN=$(az staticwebapp secrets list \
+            --name ${{ steps.deploy-infra.outputs.staticWebAppName }} \
+            --resource-group ${{ env.RESOURCE_GROUP }} \
+            --query 'properties.apiKey' -o tsv)
+          
+          echo "::add-mask::$SWA_TOKEN"
+          echo "token=$SWA_TOKEN" >> $GITHUB_OUTPUT
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+
+      - name: Install Backend Dependencies
+        run: |
+          cd backend
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Deploy Azure Functions
+        uses: Azure/functions-action@v1
+        with:
+          app-name: ${{ steps.deploy-infra.outputs.functionAppName }}
+          package: backend
+          publish-profile: ${{ secrets.AZURE_FUNCTIONAPP_PUBLISH_PROFILE }}
+
+      - name: Build and Deploy Static Web App
+        uses: Azure/static-web-apps-deploy@v1
+        with:
+          azure_static_web_apps_api_token: ${{ steps.swa-token.outputs.token }}
+          repo_token: ${{ secrets.GITHUB_TOKEN }}
+          action: 'upload'
+          app_location: '/frontend'
+          output_location: 'dist'
+
+      - name: Deployment Summary
+        run: |
+          echo "### Deployment Complete! 🚀" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Function App:** ${{ steps.deploy-infra.outputs.functionAppName }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Static Web App:** ${{ steps.deploy-infra.outputs.staticWebAppName }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Next Steps:**" >> $GITHUB_STEP_SUMMARY
+          echo "1. Configure SWA backend in Azure Portal (Backends blade)" >> $GITHUB_STEP_SUMMARY
+          echo "2. Link Function App as backend API" >> $GITHUB_STEP_SUMMARY
+          echo "3. Configure authentication providers in SWA" >> $GITHUB_STEP_SUMMARY
