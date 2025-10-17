@@ -62,7 +62,7 @@ The easiest way to get started is using the automated infrastructure workflow:
 2. **Run the Workflow**
    - Navigate to **Actions** → **Provision Infrastructure and Deploy**
    - Click **Run workflow**
-   - Choose location (default: uksouth) and resource group name
+   - Choose location (default: westeurope) and resource group name
    - The workflow will:
      - Create all Azure resources
      - Deploy the Functions backend with DRY_RUN=true
@@ -83,7 +83,7 @@ If you prefer manual setup, follow these steps:
 
 ##### Create Resource Group
 ```bash
-az group create --name wireguard-rg --location uksouth
+az group create --name wireguard-rg --location westeurope
 ```
 
 ##### Create Storage Account (for Durable Functions)
@@ -91,7 +91,7 @@ az group create --name wireguard-rg --location uksouth
 az storage account create \
   --name wireguardstorage123 \
   --resource-group wireguard-rg \
-  --location uksouth \
+  --location westeurope \
   --sku Standard_LRS
 ```
 
@@ -101,7 +101,7 @@ az functionapp create \
   --name wireguard-functions \
   --resource-group wireguard-rg \
   --storage-account wireguardstorage123 \
-  --consumption-plan-location uksouth \
+  --consumption-plan-location westeurope \
   --runtime python \
   --runtime-version 3.10 \
   --functions-version 4 \
@@ -113,7 +113,7 @@ az functionapp create \
 az staticwebapp create \
   --name wireguard-spa \
   --resource-group wireguard-rg \
-  --location uksouth \
+  --location westeurope \
   --sku Free
 ```
 
