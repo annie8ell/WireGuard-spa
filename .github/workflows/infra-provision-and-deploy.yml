@@ -10,7 +10,7 @@ on:
       location:
         description: 'Azure region for resources'
         required: true
-        default: 'uksouth'
+        default: 'westeurope'
       projectName:
         description: 'Project name prefix (lowercase, no spaces)'
         required: true
@@ -18,7 +18,7 @@ on:
 
 env:
   RESOURCE_GROUP: ${{ github.event.inputs.resourceGroupName || 'wireguard-spa-rg' }}
-  LOCATION: ${{ github.event.inputs.location || 'uksouth' }}
+  LOCATION: ${{ github.event.inputs.location || 'westeurope' }}
   PROJECT_NAME: ${{ github.event.inputs.projectName || 'wgspa' }}
 
 jobs:
