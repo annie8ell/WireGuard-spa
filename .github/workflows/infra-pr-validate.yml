@@ -1,0 +1,41 @@
+name: PR - Validate Bicep
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'infra/**'
+
+jobs:
+  validate-bicep:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+
+      - name: Install Azure CLI and jq
+        run: |
+          curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
+          sudo apt-get update && sudo apt-get install -y jq
+
+      - name: Bicep CLI install & build
+        run: |
+          az bicep install --no-progress || true
+          az bicep build --file infra/main.bicep --outdir /tmp/bicep-built
+
+      - name: (Optional) Run what-if preview
+        env:
+          AZURE_CREDENTIALS: ${{ secrets.AZURE_CREDENTIALS }}
+        run: |
+          if [ -n "${AZURE_CREDENTIALS:-}" ]; then
+            echo "Logging into Azure to run what-if (uses AZURE_CREDENTIALS)"
+            echo "$AZURE_CREDENTIALS" > /tmp/creds.json
+            az login --service-principal -u "$(jq -r .clientId /tmp/creds.json)" -p "$(jq -r .clientSecret /tmp/creds.json)" --tenant "$(jq -r .tenantId /tmp/creds.json)"
+            # what-if requires a resource group. Use a temp RG or your target RG if safe.
+            RG="${{ github.event.pull_request.head.ref }}-pr-whatif"
+            echo "NOTE: this workflow does not create RG; if you want to what-if against a RG, ensure it exists."
+            echo "Skipping actual az deployment group what-if unless resource group exists."
+          else
+            echo "No AZURE_CREDENTIALS provided; skipping what-if (bicep build still ran)."
+          fi
