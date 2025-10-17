@@ -11,6 +11,10 @@ This guide provides automation scripts that:
 - Set up all GitHub repository secrets
 - Validate the configuration
 
+## Important: GitHub Authentication in Codespaces
+
+⚠️ **The default `GITHUB_TOKEN` in Codespaces has read-only access and cannot manage repository secrets.** You must authenticate with full permissions using device code flow (`gh auth login --web`). Don't worry - you can restore the original token after setup is complete.
+
 ## Quick Start (3-Step Process for Codespaces)
 
 ### Step 1: Install Required Tools
@@ -27,9 +31,9 @@ chmod +x scripts/install-tools.sh
 - GitHub CLI (`gh`)
 - Required dependencies (curl, jq, etc.)
 
-### Step 2: Authenticate to Azure
+### Step 2: Authenticate to Azure and GitHub
 
-Authenticate to Azure (GitHub authentication is already configured in Codespaces):
+#### Authenticate to Azure
 
 ```bash
 # Login to Azure (this will open a browser)
@@ -43,14 +47,36 @@ az account set --subscription "<YOUR_SUBSCRIPTION_ID>"
 az account show
 ```
 
-**Note:** GitHub authentication is pre-configured in Codespaces via the `GITHUB_TOKEN` environment variable. You can verify with:
+#### Authenticate to GitHub (with secrets management permissions)
+
+The default `GITHUB_TOKEN` in Codespaces has read-only access and **cannot manage repository secrets**. You need to login with proper credentials:
+
 ```bash
+# Save the original token (to restore later)
+export ORIGINAL_GITHUB_TOKEN="$GITHUB_TOKEN"
+
+# Unset the read-only token
+unset GITHUB_TOKEN
+
+# Login with device code flow (provides full access)
+gh auth login --web
+
+# Verify you have the right permissions
 gh auth status
 ```
 
-If you see "value of the gh token variable is being used" - that's normal and expected in Codespaces. You're already authenticated and ready to go.
+**After running the setup script** (Step 3), you can restore the original token:
+```bash
+# Restore the original Codespaces token
+export GITHUB_TOKEN="$ORIGINAL_GITHUB_TOKEN"
+
+# Verify restoration
+gh auth status
+```
 
 ### Step 3: Run Automated Setup
+
+**Important:** Ensure you've authenticated with `gh auth login --web` (Step 2) before running this script, as it needs permissions to manage repository secrets.
 
 Now run the main setup script that does everything automatically:
 
@@ -173,26 +199,44 @@ az role assignment list --assignee $(az account show --query user.name -o tsv) -
 # You need at least Contributor role on the subscription or resource group
 ```
 
-### GitHub Authentication
+### GitHub Authentication and Secrets Management
 
-GitHub authentication is pre-configured in Codespaces. If you see "value of the gh token variable is being used" - that's expected:
+**Important:** The default `GITHUB_TOKEN` in Codespaces has **read-only access** and cannot manage repository secrets. You must authenticate with full permissions.
+
+#### Permission Denied Errors
+
+If you get "permission denied" or "insufficient permissions" when setting secrets:
 
 ```bash
-# Verify you're authenticated (should show your GitHub account)
-gh auth status
+# The default GITHUB_TOKEN doesn't have secrets:write permission
+# You need to authenticate with device code flow
 
-# The GITHUB_TOKEN environment variable is pre-configured in Codespaces
-```
+# Save original token
+export ORIGINAL_GITHUB_TOKEN="$GITHUB_TOKEN"
 
-If you need to use a different GitHub account:
-```bash
-# Unset the pre-configured token
+# Unset the read-only token
 unset GITHUB_TOKEN
 
-# Login with a different account
-gh auth logout
-gh auth login
+# Login with full permissions
+gh auth login --web
+
+# Verify - should show "Logged in to github.com as <your-username>"
+gh auth status
 ```
+
+#### Restoring the Original Token
+
+After the setup is complete, restore the Codespaces token:
+
+```bash
+# Restore original token
+export GITHUB_TOKEN="$ORIGINAL_GITHUB_TOKEN"
+
+# Verify restoration
+gh auth status
+```
+
+This allows you to continue using Codespaces normally after setup.
 
 ### Script Hangs or Times Out
 
