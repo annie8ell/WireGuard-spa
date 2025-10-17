@@ -182,9 +182,30 @@ In Azure Portal:
 
 #### 5. Configure GitHub Secrets
 
-In your GitHub repository settings (Settings > Secrets and variables > Actions):
+⚠️ **Important**: Before running any deployment workflows, you must configure the required GitHub secrets and Azure role assignments.
 
-**AZURE_CREDENTIALS** (required for infrastructure workflow)
+📖 **See [SETUP-SECRETS-AND-ROLES.md](SETUP-SECRETS-AND-ROLES.md)** for complete step-by-step instructions on:
+- Creating and configuring all required GitHub secrets
+- Setting up Azure service principals with appropriate permissions
+- Assigning roles to Function App managed identities
+- Alternative OIDC/federated credentials setup
+- Verification commands and troubleshooting
+
+**Quick validation**: After configuring secrets, run the validation workflow to ensure everything is set up correctly:
+```bash
+# Via GitHub CLI
+gh workflow run validate-secrets.yml
+
+# Or via GitHub Web UI: Actions → Validate Secrets → Run workflow
+```
+
+The following secrets are required:
+- `AZURE_CREDENTIALS` - Service principal credentials for Azure authentication
+- `AZURE_FUNCTIONAPP_PUBLISH_PROFILE` - Function App deployment credentials
+- `AZURE_STATIC_WEB_APPS_API_TOKEN` - Static Web App deployment token
+- `AZURE_FUNCTIONAPP_NAME` - Name of your Azure Function App
+
+For a quick start with just `AZURE_CREDENTIALS`:
 ```bash
 az ad sp create-for-rbac \
   --name wireguard-spa-deployer \
@@ -192,7 +213,7 @@ az ad sp create-for-rbac \
   --scopes /subscriptions/<YOUR_SUBSCRIPTION_ID> \
   --sdk-auth
 ```
-Add the entire JSON output as a secret named `AZURE_CREDENTIALS`.
+Add the entire JSON output as a secret named `AZURE_CREDENTIALS`. See [SETUP-SECRETS-AND-ROLES.md](SETUP-SECRETS-AND-ROLES.md) for the other required secrets.
 
 #### 6. Configure Authentication in Static Web App
 
