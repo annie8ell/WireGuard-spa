@@ -313,7 +313,23 @@ get_function_publish_profile() {
         return 0
     fi
     
-    log_info "Fetching publish profile..."
+    # Get the directory where this script is located
+    local script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    local helper_script="$script_dir/get-function-publish-profile.sh"
+    
+    if [[ -f "$helper_script" ]]; then
+        log_info "Using helper script to fetch publish profile..."
+        FUNCTION_PUBLISH_PROFILE=$("$helper_script" "$FUNCTION_APP_NAME" "$RESOURCE_GROUP" 2>/dev/null)
+        if [[ $? -eq 0 && -n "$FUNCTION_PUBLISH_PROFILE" ]]; then
+            log_success "Publish profile retrieved via helper script"
+            return 0
+        else
+            log_warning "Helper script failed, falling back to direct az command"
+        fi
+    fi
+    
+    # Fallback to direct az command if helper script not available or failed
+    log_info "Fetching publish profile directly..."
     FUNCTION_PUBLISH_PROFILE=$(az functionapp deployment list-publishing-profiles \
         --name "$FUNCTION_APP_NAME" \
         --resource-group "$RESOURCE_GROUP" \
@@ -338,7 +354,23 @@ get_swa_token() {
         return 0
     fi
     
-    log_info "Fetching deployment token..."
+    # Get the directory where this script is located
+    local script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    local helper_script="$script_dir/get-swa-deploy-token.sh"
+    
+    if [[ -f "$helper_script" ]]; then
+        log_info "Using helper script to fetch SWA deployment token..."
+        SWA_TOKEN=$("$helper_script" "$SWA_NAME" "$RESOURCE_GROUP" 2>/dev/null)
+        if [[ $? -eq 0 && -n "$SWA_TOKEN" && "$SWA_TOKEN" != "null" ]]; then
+            log_success "Deployment token retrieved via helper script"
+            return 0
+        else
+            log_warning "Helper script failed, falling back to direct az command"
+        fi
+    fi
+    
+    # Fallback to direct az command if helper script not available or failed
+    log_info "Fetching deployment token directly..."
     SWA_TOKEN=$(az staticwebapp secrets list \
         --name "$SWA_NAME" \
         --resource-group "$RESOURCE_GROUP" \

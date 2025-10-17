@@ -212,6 +212,12 @@ If the script seems stuck:
 
 If you prefer manual setup or the automated script doesn't work for your scenario, see the detailed manual instructions in [SETUP-SECRETS-AND-ROLES.md](SETUP-SECRETS-AND-ROLES.md).
 
+The automated setup script (`setup-all-secrets.sh`) leverages the existing helper scripts:
+- `get-function-publish-profile.sh` - For retrieving Function App credentials
+- `get-swa-deploy-token.sh` - For retrieving Static Web App token
+
+This ensures consistency between automated and manual approaches. You can also use these helper scripts individually if you only need to update specific secrets.
+
 ## What's Next?
 
 After completing this setup:
@@ -267,8 +273,10 @@ For issues or questions:
 
 - `SETUP-CREDENTIALS.md` (this file) - Quick automated setup guide
 - `scripts/install-tools.sh` - Installs Azure CLI and GitHub CLI
-- `scripts/setup-all-secrets.sh` - Main automated setup script
-- `scripts/get-function-publish-profile.sh` - Helper script (used by main script)
-- `scripts/get-swa-deploy-token.sh` - Helper script (used by main script)
+- `scripts/setup-all-secrets.sh` - Main automated setup script (uses helper scripts below)
+- `scripts/get-function-publish-profile.sh` - Helper script for Function App credentials (used by automated script)
+- `scripts/get-swa-deploy-token.sh` - Helper script for SWA token (used by automated script)
 - `.github/workflows/validate-secrets.yml` - Secrets validation workflow
 - `SETUP-SECRETS-AND-ROLES.md` - Detailed manual setup instructions
+
+**Note:** The automated setup script reuses the existing helper scripts to ensure consistency between automated and manual approaches.
