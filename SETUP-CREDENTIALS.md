@@ -1,28 +1,23 @@
-# Quick Setup Guide: Automated Credentials Configuration
+# Quick Setup Guide: Automated Credentials Configuration for GitHub Codespaces
 
-This guide provides a streamlined, automated approach to set up all required GitHub secrets and Azure permissions for the WireGuard SPA deployment. This is especially useful when working from constrained environments like an iPad.
+This guide provides a streamlined, automated approach to set up all required GitHub secrets and Azure permissions for the WireGuard SPA deployment from GitHub Codespaces (ideal for iPad or browser-based workflows).
 
 ## Overview
 
-Instead of manually running multiple `az` commands, this guide provides automation scripts that:
+This guide provides automation scripts that:
 - Install required CLI tools (Azure CLI, GitHub CLI)
 - Discover your existing Azure infrastructure
 - Automatically configure Azure permissions and roles
 - Set up all GitHub repository secrets
 - Validate the configuration
 
-## Quick Start (2-Step Process)
+## Quick Start (3-Step Process for Codespaces)
 
 ### Step 1: Install Required Tools
 
-Run this script to install Azure CLI and GitHub CLI:
+In your Codespace terminal, run:
 
 ```bash
-# Download and run the tool installation script
-curl -fsSL https://raw.githubusercontent.com/annie8ell/WireGuard-spa/main/scripts/install-tools.sh | bash
-
-# Or if you've cloned the repository:
-cd /path/to/WireGuard-spa
 chmod +x scripts/install-tools.sh
 ./scripts/install-tools.sh
 ```
@@ -32,13 +27,9 @@ chmod +x scripts/install-tools.sh
 - GitHub CLI (`gh`)
 - Required dependencies (curl, jq, etc.)
 
-### Step 2: Authenticate to Azure and GitHub
+### Step 2: Authenticate to Azure
 
-After the tools are installed, authenticate to both services:
-
-**Note:** If you're working in GitHub Codespaces, you're likely already authenticated to GitHub and can skip the `gh auth login` step. Check with `gh auth status` first.
-
-#### Authenticate to Azure
+Authenticate to Azure (GitHub authentication is already configured in Codespaces):
 
 ```bash
 # Login to Azure (this will open a browser)
@@ -52,34 +43,12 @@ az account set --subscription "<YOUR_SUBSCRIPTION_ID>"
 az account show
 ```
 
-#### Authenticate to GitHub
-
+**Note:** GitHub authentication is pre-configured in Codespaces via the `GITHUB_TOKEN` environment variable. You can verify with:
 ```bash
-# Login to GitHub CLI
-gh auth login
-
-# Follow the prompts to authenticate
-# Choose: HTTPS, Login with a web browser, and paste your code
-
-# Verify you're authenticated
 gh auth status
 ```
 
-**Note for Codespaces users:** If you see a message like "value of the gh token variable is being used", the GitHub CLI is picking up the `GITHUB_TOKEN` environment variable automatically set in Codespaces. This is usually fine and means you're already authenticated. However, if you need to authenticate with a different account or set repository secrets, you may need to:
-
-```bash
-# Option 1: Check if you're already authenticated
-gh auth status
-
-# Option 2: If you need to login with a different account, unset the token first
-unset GITHUB_TOKEN
-gh auth login
-
-# Option 3: Use a different authentication method
-gh auth login --with-token < your-token-file
-```
-
-Most Codespaces users can skip `gh auth login` entirely since the environment is pre-authenticated with your GitHub account.
+If you see "value of the gh token variable is being used" - that's normal and expected in Codespaces. You're already authenticated and ready to go.
 
 ### Step 3: Run Automated Setup
 
@@ -204,38 +173,26 @@ az role assignment list --assignee $(az account show --query user.name -o tsv) -
 # You need at least Contributor role on the subscription or resource group
 ```
 
-### GitHub Authentication Issues
+### GitHub Authentication
 
-If `gh` commands fail or you see "value of the gh token variable is being used":
+GitHub authentication is pre-configured in Codespaces. If you see "value of the gh token variable is being used" - that's expected:
 
-**In Codespaces:**
 ```bash
-# Check if already authenticated (usually yes in Codespaces)
+# Verify you're authenticated (should show your GitHub account)
 gh auth status
 
-# If authenticated, you can skip 'gh auth login'
-# The GITHUB_TOKEN environment variable is pre-configured
+# The GITHUB_TOKEN environment variable is pre-configured in Codespaces
+```
 
-# If you need to switch accounts, unset the token first
+If you need to use a different GitHub account:
+```bash
+# Unset the pre-configured token
 unset GITHUB_TOKEN
+
+# Login with a different account
 gh auth logout
 gh auth login
 ```
-
-**Outside Codespaces:**
-```bash
-# Re-authenticate
-gh auth logout
-gh auth login
-
-# Verify authentication
-gh auth status
-```
-
-**Token vs Interactive Login:**
-- `gh auth login` prefers environment variables (`GITHUB_TOKEN`, `GH_TOKEN`) if set
-- In Codespaces, this is usually what you want (pre-authenticated)
-- For manual login, ensure these variables are unset first
 
 ### Script Hangs or Times Out
 
