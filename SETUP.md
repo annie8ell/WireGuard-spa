@@ -16,16 +16,29 @@ Create these secrets in your GitHub repository (Settings → Secrets and variabl
 
 Service Principal JSON for infrastructure provisioning and SWA token retrieval.
 
+**Important**: The service principal requires both **Contributor** and **User Access Administrator** roles. See [PERMISSIONS.md](PERMISSIONS.md) for details.
+
 ```bash
 # Create Service Principal with Contributor role
-az ad sp create-for-rbac \
+SP_OUTPUT=$(az ad sp create-for-rbac \
   --name "wireguard-spa-sp" \
   --role contributor \
   --scopes /subscriptions/{YOUR_SUBSCRIPTION_ID} \
-  --sdk-auth
+  --sdk-auth)
+
+echo "$SP_OUTPUT"
+
+# Extract the service principal's application ID
+SP_APP_ID=$(echo "$SP_OUTPUT" | jq -r '.clientId')
+
+# Grant User Access Administrator role (required for role assignments in Bicep)
+az role assignment create \
+  --assignee "$SP_APP_ID" \
+  --role "User Access Administrator" \
+  --scope /subscriptions/{YOUR_SUBSCRIPTION_ID}
 ```
 
-Copy the entire JSON output and save it as `AZURE_CREDENTIALS` secret.
+Copy the entire JSON output from the first command and save it as `AZURE_CREDENTIALS` secret.
 
 #### 2. AZURE_FUNCTIONAPP_PUBLISH_PROFILE (Optional)
 

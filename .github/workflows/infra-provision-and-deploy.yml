@@ -63,17 +63,116 @@ jobs:
             echo "Resource group '$RG' exists in the requested location '$LOCATION'. Continuing."
           fi
 
+      - name: Check Azure Service Principal Permissions
+        id: check-permissions
+        run: |
+          set -euo pipefail
+          RG="${{ env.RESOURCE_GROUP }}"
+          SUBSCRIPTION_ID=$(az account show --query id -o tsv)
+          SP_OBJECT_ID=$(az ad signed-in-user show --query id -o tsv 2>/dev/null || echo "")
+          
+          echo "### Azure Service Principal Permission Check ###"
+          echo ""
+          echo "Subscription ID: $SUBSCRIPTION_ID"
+          echo "Resource Group: $RG"
+          
+          if [ -n "$SP_OBJECT_ID" ]; then
+            echo "Service Principal Object ID: $SP_OBJECT_ID"
+          else
+            echo "Note: Running as service principal (object ID not available via signed-in-user)"
+          fi
+          echo ""
+          
+          # Check role assignments at resource group level
+          echo "Checking role assignments at Resource Group scope..."
+          RG_ROLES=$(az role assignment list --scope "/subscriptions/$SUBSCRIPTION_ID/resourceGroups/$RG" --query "[].{Role:roleDefinitionName, Scope:scope}" -o json 2>/dev/null || echo "[]")
+          echo "Resource Group Roles: $RG_ROLES"
+          echo ""
+          
+          # Check if we can create role assignments
+          echo "Testing permission: Microsoft.Authorization/roleAssignments/write"
+          CAN_ASSIGN_ROLES=$(az provider show --namespace Microsoft.Authorization --query "resourceTypes[?resourceType=='roleAssignments'].permissions[0].allowedPermissions" -o tsv 2>/dev/null || echo "unknown")
+          
+          # Check actual permissions via what-if deployment
+          echo ""
+          echo "Testing deployment permissions with what-if analysis..."
+          WHAT_IF_RESULT=$(az deployment group what-if \
+            --resource-group "$RG" \
+            --template-file infra/main.bicep \
+            --parameters projectName=${{ env.PROJECT_NAME }} location=${{ env.LOCATION }} \
+            --no-pretty-print 2>&1 || true)
+          
+          echo "$WHAT_IF_RESULT"
+          echo ""
+          
+          # Check for authorization errors in what-if
+          if echo "$WHAT_IF_RESULT" | grep -qi "Microsoft.Authorization/roleAssignments/write"; then
+            echo "❌ ERROR: Service principal lacks permission to create role assignments"
+            echo ""
+            echo "### Required Permissions ###"
+            echo "The service principal needs one of the following roles at the Resource Group or Subscription level:"
+            echo "  - Owner"
+            echo "  - User Access Administrator (in addition to Contributor)"
+            echo ""
+            echo "Current Bicep template requires creating role assignments for:"
+            echo "  - Virtual Machine Contributor role for Function App managed identity"
+            echo "  - Network Contributor role for Function App managed identity"
+            echo ""
+            echo "### How to Fix ###"
+            echo "Option 1: Grant 'User Access Administrator' role to the service principal"
+            echo "  az role assignment create --assignee <service-principal-id> --role 'User Access Administrator' --scope /subscriptions/$SUBSCRIPTION_ID/resourceGroups/$RG"
+            echo ""
+            echo "Option 2: Grant 'Owner' role to the service principal"  
+            echo "  az role assignment create --assignee <service-principal-id> --role 'Owner' --scope /subscriptions/$SUBSCRIPTION_ID/resourceGroups/$RG"
+            echo ""
+            echo "Note: This check will not fail the workflow, but the deployment step will fail without proper permissions."
+          else
+            echo "✅ Service principal appears to have necessary permissions"
+          fi
+
       - name: Deploy Bicep Infrastructure (assumes RG exists)
         id: deploy-infra
         run: |
           set -euo pipefail
           # Bicep templates should not create the resource group (deploy into existing RG)
-          OUTPUT=$(az deployment group create \
+          
+          echo "Deploying Bicep infrastructure..."
+          DEPLOYMENT_OUTPUT=$(az deployment group create \
             --resource-group "${{ env.RESOURCE_GROUP }}" \
             --template-file infra/main.bicep \
             --parameters projectName=${{ env.PROJECT_NAME }} location=${{ env.LOCATION }} \
-            --query 'properties.outputs' -o json)
+            --query 'properties.outputs' -o json 2>&1) || {
+            DEPLOY_EXIT_CODE=$?
+            echo "Deployment failed with exit code: $DEPLOY_EXIT_CODE"
+            echo "$DEPLOYMENT_OUTPUT"
+            
+            # Check for authorization error
+            if echo "$DEPLOYMENT_OUTPUT" | grep -qi "Microsoft.Authorization/roleAssignments/write"; then
+              echo ""
+              echo "❌ AUTHORIZATION ERROR DETECTED"
+              echo ""
+              echo "The deployment failed because the service principal does not have permission to create role assignments."
+              echo ""
+              echo "### Required Action ###"
+              echo "Grant the service principal 'User Access Administrator' or 'Owner' role at the Resource Group or Subscription level."
+              echo ""
+              echo "Commands to fix:"
+              echo "1. Get the service principal's application ID from your AZURE_CREDENTIALS secret"
+              echo "2. Run one of these commands:"
+              echo ""
+              echo "   # Option 1: User Access Administrator (minimum required)"
+              echo "   az role assignment create --assignee <sp-app-id> --role 'User Access Administrator' --resource-group ${{ env.RESOURCE_GROUP }}"
+              echo ""
+              echo "   # Option 2: Owner (full access)"
+              echo "   az role assignment create --assignee <sp-app-id> --role 'Owner' --resource-group ${{ env.RESOURCE_GROUP }}"
+              echo ""
+              echo "See the 'Check Azure Service Principal Permissions' step above for more details."
+            fi
+            
+            exit $DEPLOY_EXIT_CODE
+          }
 
+          OUTPUT="$DEPLOYMENT_OUTPUT"
           echo "Deployment outputs: $OUTPUT"
 
           FUNCTION_APP_NAME=$(echo "$OUTPUT" | jq -r '.functionAppName.value // empty')
