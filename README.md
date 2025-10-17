@@ -205,7 +205,7 @@ The following secrets are required:
 - `AZURE_STATIC_WEB_APPS_API_TOKEN` - Static Web App deployment token
 - `AZURE_FUNCTIONAPP_NAME` - Name of your Azure Function App
 
-For a quick start with just `AZURE_CREDENTIALS`:
+**Example:** Creating the `AZURE_CREDENTIALS` secret:
 ```bash
 az ad sp create-for-rbac \
   --name wireguard-spa-deployer \
@@ -213,7 +213,9 @@ az ad sp create-for-rbac \
   --scopes /subscriptions/<YOUR_SUBSCRIPTION_ID> \
   --sdk-auth
 ```
-Add the entire JSON output as a secret named `AZURE_CREDENTIALS`. See [SETUP-SECRETS-AND-ROLES.md](SETUP-SECRETS-AND-ROLES.md) for the other required secrets.
+Add the entire JSON output as a secret named `AZURE_CREDENTIALS`.
+
+**Note:** You must configure ALL four secrets listed above before running deployment workflows. See [SETUP-SECRETS-AND-ROLES.md](SETUP-SECRETS-AND-ROLES.md) for detailed instructions on retrieving and configuring each secret.
 
 #### 6. Configure Authentication in Static Web App
 
