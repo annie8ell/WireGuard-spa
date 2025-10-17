@@ -36,6 +36,8 @@ chmod +x scripts/install-tools.sh
 
 After the tools are installed, authenticate to both services:
 
+**Note:** If you're working in GitHub Codespaces, you're likely already authenticated to GitHub and can skip the `gh auth login` step. Check with `gh auth status` first.
+
 #### Authenticate to Azure
 
 ```bash
@@ -62,6 +64,22 @@ gh auth login
 # Verify you're authenticated
 gh auth status
 ```
+
+**Note for Codespaces users:** If you see a message like "value of the gh token variable is being used", the GitHub CLI is picking up the `GITHUB_TOKEN` environment variable automatically set in Codespaces. This is usually fine and means you're already authenticated. However, if you need to authenticate with a different account or set repository secrets, you may need to:
+
+```bash
+# Option 1: Check if you're already authenticated
+gh auth status
+
+# Option 2: If you need to login with a different account, unset the token first
+unset GITHUB_TOKEN
+gh auth login
+
+# Option 3: Use a different authentication method
+gh auth login --with-token < your-token-file
+```
+
+Most Codespaces users can skip `gh auth login` entirely since the environment is pre-authenticated with your GitHub account.
 
 ### Step 3: Run Automated Setup
 
@@ -188,8 +206,23 @@ az role assignment list --assignee $(az account show --query user.name -o tsv) -
 
 ### GitHub Authentication Issues
 
-If `gh` commands fail:
+If `gh` commands fail or you see "value of the gh token variable is being used":
 
+**In Codespaces:**
+```bash
+# Check if already authenticated (usually yes in Codespaces)
+gh auth status
+
+# If authenticated, you can skip 'gh auth login'
+# The GITHUB_TOKEN environment variable is pre-configured
+
+# If you need to switch accounts, unset the token first
+unset GITHUB_TOKEN
+gh auth logout
+gh auth login
+```
+
+**Outside Codespaces:**
 ```bash
 # Re-authenticate
 gh auth logout
@@ -198,6 +231,11 @@ gh auth login
 # Verify authentication
 gh auth status
 ```
+
+**Token vs Interactive Login:**
+- `gh auth login` prefers environment variables (`GITHUB_TOKEN`, `GH_TOKEN`) if set
+- In Codespaces, this is usually what you want (pre-authenticated)
+- For manual login, ensure these variables are unset first
 
 ### Script Hangs or Times Out
 
