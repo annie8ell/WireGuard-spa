@@ -43,21 +43,38 @@ WireGuard requires kernel-level TUN/TAP device support which Azure Container Ins
 ### Required GitHub Secrets
 - `AZURE_CREDENTIALS` - Service principal credentials for Azure login (JSON format)
 
+> **Important**: The service principal requires specific permissions to deploy the infrastructure. See [PERMISSIONS.md](PERMISSIONS.md) for detailed requirements.
+
 ## Setup Instructions
 
 ### Quick Start with Infrastructure Workflow
 
 The easiest way to get started is using the automated infrastructure workflow:
 
-1. **Create Azure Service Principal**
+1. **Create Azure Service Principal with Required Permissions**
    ```bash
-   az ad sp create-for-rbac \
+   # Create service principal with Contributor role
+   SP_OUTPUT=$(az ad sp create-for-rbac \
      --name wireguard-spa-deployer \
      --role Contributor \
      --scopes /subscriptions/<YOUR_SUBSCRIPTION_ID> \
-     --sdk-auth
+     --sdk-auth)
+   
+   echo "$SP_OUTPUT"
+   
+   # Extract the service principal's application ID
+   SP_APP_ID=$(echo "$SP_OUTPUT" | jq -r '.clientId')
+   
+   # Grant User Access Administrator role (required for creating role assignments)
+   az role assignment create \
+     --assignee "$SP_APP_ID" \
+     --role "User Access Administrator" \
+     --scope /subscriptions/<YOUR_SUBSCRIPTION_ID>
    ```
-   Save the JSON output as the `AZURE_CREDENTIALS` secret in GitHub.
+   
+   Save the JSON output from the first command as the `AZURE_CREDENTIALS` secret in GitHub.
+   
+   > **Note**: The service principal needs both **Contributor** and **User Access Administrator** roles to deploy the infrastructure. See [PERMISSIONS.md](PERMISSIONS.md) for details.
 
 2. **Run the Workflow**
    - Navigate to **Actions** → **Provision Infrastructure and Deploy**
