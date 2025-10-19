@@ -9,9 +9,13 @@ This document provides a comprehensive review of the WireGuard SPA deployment ar
 2. Choice between Kudu/publish-profile vs Run-From-Package deployment models
 3. VM provisioning strategy: cloud-init vs pre-baked custom images
 
-**Recommended Actions:**
-- ✅ **Option A (Implemented):** Restore Kudu/publish-profile deployment by removing `WEBSITE_RUN_FROM_PACKAGE`
-- 🔄 **Future Enhancement:** Consider pre-baked VM images for faster provisioning and improved reliability
+**Status:**
+- ✅ **CI Fix Implemented:** Modified workflow to remove `WEBSITE_RUN_FROM_PACKAGE` conflicts
+- 📋 **For Discussion:** Custom VM image support - review Section 3 for pros/cons before implementing
+- 📋 **For Discussion:** Alternative deployment model (Run-From-Package) - review Section 2 for tradeoffs
+
+**Purpose of This Document:**
+This is a decision document to facilitate discussion and sign-off on architectural choices. The custom VM image feature and alternative deployment approaches are **proposed but not yet implemented** - pending your review and approval.
 
 ---
 
@@ -92,7 +96,7 @@ Restore the intended Kudu deployment model by ensuring `WEBSITE_RUN_FROM_PACKAGE
 
 **Implementation (Completed):**
 - ✅ Modified `.github/workflows/functions-deploy.yml` to detect and remove `WEBSITE_RUN_FROM_PACKAGE` before deployment
-- ✅ Created `.github/workflows/provision-and-deploy.yml` with the same safeguard
+- ✅ Created `.github/workflows/infra-provision-and-deploy.yml` with the same safeguard
 - ✅ Backup mechanism: Previous setting value saved to workflow artifact for audit trail
 
 **Advantages:**
@@ -268,7 +272,7 @@ az image show \
 **Option 1: Pass to Infrastructure Deployment**
 ```bash
 # Use the new provision-and-deploy workflow with custom image
-gh workflow run provision-and-deploy.yml \
+gh workflow run infra-provision-and-deploy.yml \
   -f resourceGroupName=wireguard-spa-rg \
   -f location=westeurope \
   -f projectName=wgspa \
@@ -396,11 +400,15 @@ When ready to adopt pre-baked images:
 ### 4.1 Immediate Actions (Completed ✅)
 
 - [x] Modify `functions-deploy.yml` to remove `WEBSITE_RUN_FROM_PACKAGE` before deployment
-- [x] Create `provision-and-deploy.yml` for end-to-end infrastructure and deployment
-- [x] Add `customVmImageId` parameter to `infra/main.bicep`
 - [x] Document deployment models and trade-offs in this review
 
-### 4.2 Required Decisions
+### 4.2 Proposed Enhancements (Pending Discussion)
+
+- [ ] Add `customVmImageId` parameter to `infra/main.bicep` (discussed in Section 3)
+- [ ] Create custom WireGuard VM images (discussed in Section 3.2)
+- [ ] Consider Run-From-Package deployment model (discussed in Section 2.3)
+
+### 4.3 Required Decisions
 
 #### Decision 1: Deployment Model
 - **Recommended:** ✅ Option A - Keep Kudu/Publish-Profile (implemented)
@@ -417,12 +425,12 @@ When ready to adopt pre-baked images:
 **Phase 1 Sign-off (Keep Cloud-Init):** ☐ Approved by: _______________ Date: ___________
 **Phase 2 Sign-off (Adopt Custom Images):** ☐ Approved by: _______________ Date: ___________
 
-### 4.3 Testing and Validation Plan
+### 4.4 Testing and Validation Plan
 
 #### Pre-Production Testing
 - [ ] Test `functions-deploy.yml` with `WEBSITE_RUN_FROM_PACKAGE` present
 - [ ] Test `functions-deploy.yml` with `WEBSITE_RUN_FROM_PACKAGE` absent
-- [ ] Run `provision-and-deploy.yml` in a test resource group
+- [ ] Run `infra-provision-and-deploy.yml` in a test resource group
 - [ ] Verify Function App deployment succeeds
 - [ ] Verify Static Web App deployment succeeds
 - [ ] Test VM provisioning in DRY_RUN mode
@@ -436,7 +444,7 @@ When ready to adopt pre-baked images:
 - [ ] Monitor costs and provisioning times
 - [ ] Set up alerts for deployment failures
 
-### 4.4 Rollback Plan
+### 4.5 Rollback Plan
 
 **If CI Deployments Fail:**
 1. Check workflow logs for specific errors
@@ -456,7 +464,7 @@ When ready to adopt pre-baked images:
      --settings WEBSITE_RUN_FROM_PACKAGE=<original-url>
    ```
 
-### 4.5 Required IAM Roles and Permissions
+### 4.6 Required IAM Roles and Permissions
 
 For service principal used in CI/CD (`AZURE_CREDENTIALS`):
 
@@ -548,7 +556,7 @@ az monitor metrics alert create \
 ### Repository Files
 - `infra/main.bicep` - Infrastructure template
 - `.github/workflows/functions-deploy.yml` - Function App CI/CD
-- `.github/workflows/provision-and-deploy.yml` - End-to-end deployment
+- `.github/workflows/infra-provision-and-deploy.yml` - End-to-end deployment
 - `backend/README.md` - Backend deployment guide
 - `scripts/get-function-publish-profile.sh` - Publish profile utility
 
@@ -570,7 +578,7 @@ az monitor metrics alert create \
 
 1. **Immediate (This PR):**
    - Merge this PR to fix CI failures
-   - Test `provision-and-deploy.yml` in development environment
+   - Test `infra-provision-and-deploy.yml` in development environment
    - Validate VM provisioning with DRY_RUN=true
 
 2. **Short-term (Next 2-4 weeks):**

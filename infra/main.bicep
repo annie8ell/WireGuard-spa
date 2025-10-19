@@ -20,9 +20,6 @@ param allowedEmails string = 'awwsawws@gmail.com,awwsawws@hotmail.com'
 @description('Enable dry run mode (no actual VM creation)')
 param dryRun string = 'false'
 
-@description('Optional: Custom VM Image Resource ID for pre-baked WireGuard images. If provided, VMs will use this custom image instead of a marketplace image with cloud-init. Format: /subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.Compute/images/{imageName} or /subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.Compute/galleries/{galleryName}/images/{imageName}/versions/{versionNumber}')
-param customVmImageId string = ''
-
 // Generate unique names
 var uniqueSuffix = uniqueString(resourceGroup().id)
 var storageAccountName = '${projectName}${uniqueSuffix}'
@@ -175,5 +172,3 @@ output functionAppHostName string = functionApp.properties.defaultHostName
 output staticWebAppName string = staticWebApp.name
 output staticWebAppResourceId string = staticWebApp.id
 output staticWebAppDefaultHostName string = staticWebApp.properties.defaultHostname
-output customVmImageConfigured bool = !empty(customVmImageId)
-output customVmImageId string = customVmImageId
