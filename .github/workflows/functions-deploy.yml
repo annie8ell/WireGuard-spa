@@ -27,64 +27,33 @@ jobs:
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
 
-      - name: Remove WEBSITE_RUN_FROM_PACKAGE setting if present
+      - name: Remove WEBSITE_RUN_FROM_PACKAGE if conflicting
         run: |
           set -euo pipefail
-          FUNCTION_APP_NAME="${{ secrets.AZURE_FUNCTIONAPP_NAME }}"
-          
-          echo "=== Checking WEBSITE_RUN_FROM_PACKAGE setting ==="
-          
-          # Query the current value of WEBSITE_RUN_FROM_PACKAGE
           CURRENT_VALUE=$(az functionapp config appsettings list \
-            --name "$FUNCTION_APP_NAME" \
+            --name "${{ secrets.AZURE_FUNCTIONAPP_NAME }}" \
             --resource-group "${{ secrets.AZURE_RESOURCE_GROUP || 'wireguard-spa-rg' }}" \
             --query "[?name=='WEBSITE_RUN_FROM_PACKAGE'].value" -o tsv 2>/dev/null || echo "")
           
-          if [ -z "$CURRENT_VALUE" ]; then
-            echo "✓ WEBSITE_RUN_FROM_PACKAGE is not set. No action needed."
-            echo "setting_was_present=false" >> $GITHUB_ENV
+          if [ -n "$CURRENT_VALUE" ] && [[ "$CURRENT_VALUE" =~ ^https?:// ]]; then
+            echo "Removing WEBSITE_RUN_FROM_PACKAGE (conflicts with Kudu deployment)"
+            echo "Previous value: $CURRENT_VALUE" > website_run_from_package_backup.txt
+            az functionapp config appsettings delete \
+              --name "${{ secrets.AZURE_FUNCTIONAPP_NAME }}" \
+              --resource-group "${{ secrets.AZURE_RESOURCE_GROUP || 'wireguard-spa-rg' }}" \
+              --setting-names WEBSITE_RUN_FROM_PACKAGE
+            az functionapp restart \
+              --name "${{ secrets.AZURE_FUNCTIONAPP_NAME }}" \
+              --resource-group "${{ secrets.AZURE_RESOURCE_GROUP || 'wireguard-spa-rg' }}"
+            sleep 30
+            echo "removed=true" >> $GITHUB_ENV
           else
-            echo "⚠ WEBSITE_RUN_FROM_PACKAGE is currently set to: $CURRENT_VALUE"
-            
-            # Save the value for audit trail (mask sensitive URLs)
-            echo "::add-mask::$CURRENT_VALUE"
-            echo "Previous WEBSITE_RUN_FROM_PACKAGE value: $CURRENT_VALUE" > website_run_from_package_backup.txt
-            
-            # Check if it looks like a URL (starts with http:// or https://)
-            if [[ "$CURRENT_VALUE" =~ ^https?:// ]]; then
-              echo "⚠ Value appears to be an external package URL, which conflicts with Kudu zipdeploy."
-              echo "   Removing WEBSITE_RUN_FROM_PACKAGE to allow publish-profile deployment..."
-              
-              # Delete the setting
-              az functionapp config appsettings delete \
-                --name "$FUNCTION_APP_NAME" \
-                --resource-group "${{ secrets.AZURE_RESOURCE_GROUP || 'wireguard-spa-rg' }}" \
-                --setting-names WEBSITE_RUN_FROM_PACKAGE
-              
-              echo "✓ WEBSITE_RUN_FROM_PACKAGE setting removed."
-              echo "setting_was_present=true" >> $GITHUB_ENV
-              
-              # Restart the Function App to apply changes
-              echo "Restarting Function App to apply configuration changes..."
-              az functionapp restart \
-                --name "$FUNCTION_APP_NAME" \
-                --resource-group "${{ secrets.AZURE_RESOURCE_GROUP || 'wireguard-spa-rg' }}"
-              
-              echo "✓ Function App restarted successfully."
-              echo "⏳ Waiting 30 seconds for Function App to stabilize..."
-              sleep 30
-            else
-              echo "✓ Value does not appear to be a URL. No action needed."
-              echo "setting_was_present=false" >> $GITHUB_ENV
-            fi
+            echo "WEBSITE_RUN_FROM_PACKAGE not set or not a URL - no action needed"
+            echo "removed=false" >> $GITHUB_ENV
           fi
-          
-          echo ""
-          echo "=== Summary ==="
-          echo "Function App is now configured for Kudu/publish-profile deployment."
 
-      - name: Upload backup artifact (if setting was removed)
-        if: env.setting_was_present == 'true'
+      - name: Upload backup artifact
+        if: env.removed == 'true'
         uses: actions/upload-artifact@v3
         with:
           name: website-run-from-package-backup
