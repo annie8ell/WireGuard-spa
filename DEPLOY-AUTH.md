@@ -2,6 +2,8 @@
 
 This document provides comprehensive instructions for deploying the WireGuard SPA with Azure Static Web Apps (SWA) invitations and role-based authorization. The integrated Functions API is protected so only users with the `invited` role can access it.
 
+**Important**: This deployment uses the Azure Static Web Apps Invitations feature to manage user access via the `invited` role.
+
 ## Table of Contents
 
 1. [Overview](#overview)
