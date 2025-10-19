@@ -32,7 +32,7 @@ jobs:
           set -euo pipefail
           CURRENT_VALUE=$(az functionapp config appsettings list \
             --name "${{ secrets.AZURE_FUNCTIONAPP_NAME }}" \
-            --resource-group "${{ secrets.AZURE_RESOURCE_GROUP || 'wireguard-spa-rg' }}" \
+            --resource-group "${{ secrets.AZURE_RESOURCE_GROUP }}" \
             --query "[?name=='WEBSITE_RUN_FROM_PACKAGE'].value" -o tsv 2>/dev/null || echo "")
           
           if [ -n "$CURRENT_VALUE" ] && [[ "$CURRENT_VALUE" =~ ^https?:// ]]; then
@@ -40,11 +40,11 @@ jobs:
             echo "Previous value: $CURRENT_VALUE" > website_run_from_package_backup.txt
             az functionapp config appsettings delete \
               --name "${{ secrets.AZURE_FUNCTIONAPP_NAME }}" \
-              --resource-group "${{ secrets.AZURE_RESOURCE_GROUP || 'wireguard-spa-rg' }}" \
+              --resource-group "${{ secrets.AZURE_RESOURCE_GROUP }}" \
               --setting-names WEBSITE_RUN_FROM_PACKAGE
             az functionapp restart \
               --name "${{ secrets.AZURE_FUNCTIONAPP_NAME }}" \
-              --resource-group "${{ secrets.AZURE_RESOURCE_GROUP || 'wireguard-spa-rg' }}"
+              --resource-group "${{ secrets.AZURE_RESOURCE_GROUP }}"
             sleep 30
             echo "removed=true" >> $GITHUB_ENV
           else
