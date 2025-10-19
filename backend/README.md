@@ -213,6 +213,10 @@ def validate_user(req):
 
 Push to `main` branch or trigger the `Deploy Backend` workflow manually.
 
+The deployment workflow (`.github/workflows/functions-deploy.yml`) automatically handles `WEBSITE_RUN_FROM_PACKAGE` conflicts that can prevent Kudu deployments. See [ARCHITECTURE_REVIEW.md](../ARCHITECTURE_REVIEW.md) for more information about deployment models.
+
+For complete infrastructure provisioning, use `.github/workflows/infra-provision-and-deploy.yml` (manual dispatch only).
+
 ### Option 2: Using Azure Functions Core Tools
 
 ```bash
