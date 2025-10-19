@@ -54,11 +54,11 @@ jobs:
             exit 0
           fi
           # Write publish profile to a temp file
-          echo "$PUBLISH_PROFILE" > /tmp/publish.xml
-          # Extract publishUrl, userName and userPWD from the publish profile using sed
-          PUBURL=$(sed -n 's/.*publishUrl="\([^"]*\)".*/\1/p' /tmp/publish.xml | head -n1)
-          USERNAME=$(sed -n 's/.*userName="\([^"]*\)".*/\1/p' /tmp/publish.xml | head -n1)
-          PASSWORD=$(sed -n 's/.*userPWD="\([^"]*\)".*/\1/p' /tmp/publish.xml | head -n1)
+      echo "$PUBLISH_PROFILE" > /tmp/publish.xml
+      # Extract publishUrl, userName and userPWD from the publish profile using sed
+      PUBURL=$(sed -n 's/.*publishUrl="\([^\"]*\)".*/\1/p' /tmp/publish.xml | head -n1)
+      USERNAME=$(sed -n 's/.*userName="\([^\"]*\)".*/\1/p' /tmp/publish.xml | head -n1)
+      PASSWORD=$(sed -n 's/.*userPWD="\([^\"]*\)".*/\1/p' /tmp/publish.xml | head -n1)
 
           if [ -z "$PUBURL" ] || [ -z "$USERNAME" ] || [ -z "$PASSWORD" ]; then
             echo "Failed to parse publish profile, skipping Kudu cleanup."
