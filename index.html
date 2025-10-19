@@ -131,7 +131,6 @@
                 configText: null,
                 error: null,
                 pollInterval: null,
-                allowlist: ['annie8ell@gmail.com'], // Seed allowlist
 
                 async init() {
                     await this.checkAuth();
@@ -143,13 +142,14 @@
                         const data = await response.json();
                         
                         if (data.clientPrincipal) {
-                            const email = data.clientPrincipal.userDetails;
-                            // Check allowlist
-                            if (this.allowlist.includes(email)) {
-                                this.user = data.clientPrincipal;
-                            } else {
-                                console.warn('User not in allowlist:', email);
-                                this.user = null;
+                            // Trust /.auth/me for auth state
+                            // UI is role-aware for display purposes only
+                            // Authorization is enforced at the SWA edge and backend
+                            this.user = data.clientPrincipal;
+                            
+                            const hasInvitedRole = data.clientPrincipal.userRoles?.includes('invited');
+                            if (!hasInvitedRole) {
+                                console.info('User authenticated but does not have invited role');
                             }
                         }
                     } catch (err) {

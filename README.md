@@ -7,13 +7,13 @@ A minimal end-to-end solution for provisioning on-demand WireGuard VPN servers o
 ### Frontend (SPA)
 - **Technology**: Zero-build Single Page Application using Foundation CSS and Alpine.js (via CDN)
 - **Authentication**: Azure Static Web Apps built-in authentication (Google/Microsoft)
-- **Authorization**: Hardcoded allowlist with seed user `annie8ell@gmail.com`
+- **Authorization**: Role-based authorization using SWA Invitations and the `invited` role
 - **Deployment**: Azure Static Web Apps
 
 ### Backend (Durable Functions)
 - **Technology**: Python 3.10 Azure Durable Functions
 - **Pattern**: Async HTTP API with orchestrator
-- **Authentication**: Validates X-MS-CLIENT-PRINCIPAL header against allowlist
+- **Authentication**: Validates X-MS-CLIENT-PRINCIPAL header for `invited` role
 - **VM**: Minimal Ubuntu VM (Standard_B1ls) with WireGuard
 - **Auto-teardown**: 30-minute durable timer
 
@@ -24,7 +24,7 @@ WireGuard requires kernel-level TUN/TAP device support which Azure Container Ins
 
 - ✅ **Zero-build SPA** - No compilation or bundling required
 - ✅ **Built-in authentication** - Uses Azure SWA auth (Google/Microsoft)
-- ✅ **Email allowlist** - Simple authorization control
+- ✅ **Role-based authorization** - SWA Invitations with `invited` role
 - ✅ **DRY_RUN mode** - Test without provisioning Azure resources
 - ✅ **Automatic teardown** - VMs automatically deleted after 30 minutes
 - ✅ **Minimal cost** - Uses cheapest VM size (Standard_B1ls)
@@ -35,13 +35,16 @@ WireGuard requires kernel-level TUN/TAP device support which Azure Container Ins
 
 ### Azure Resources
 1. **Azure Subscription** with permissions to create VMs
-2. **Azure Static Web App** (Free tier works)
+2. **Azure Static Web App** (Free tier works, Standard recommended for production)
 3. **Azure Function App** (Consumption plan, Python 3.10)
 4. **Azure Storage Account** (for Durable Functions state)
 5. **Resource Group** where VMs will be created
 
 ### Required GitHub Secrets
 - `AZURE_CREDENTIALS` - Service principal credentials for Azure login (JSON format)
+
+### Authentication and Authorization
+For detailed instructions on setting up Azure Static Web Apps Invitations and role-based authorization, see **[DEPLOY-AUTH.md](DEPLOY-AUTH.md)**.
 
 ## Setup Instructions
 
@@ -166,11 +169,10 @@ az functionapp config appsettings set \
     AZURE_SUBSCRIPTION_ID="$SUBSCRIPTION_ID" \
     AZURE_RESOURCE_GROUP="wireguard-rg" \
     ADMIN_USERNAME="azureuser" \
-    ALLOWED_EMAILS="awwsawws@gmail.com,awwsawws@hotmail.com" \
     DRY_RUN="true"
 ```
 
-**Note**: Start with `DRY_RUN=true` to test the flow without creating real VMs. The automated workflow sets these automatically.
+**Note**: Start with `DRY_RUN=true` to test the flow without creating real VMs. The automated workflow sets these automatically. For production deployment with SWA Invitations, see **[DEPLOY-AUTH.md](DEPLOY-AUTH.md)**.
 
 #### 4. Link Function App as Backend in Static Web App
 
@@ -222,7 +224,10 @@ Add the entire JSON output as a secret named `AZURE_CREDENTIALS`.
 1. In Azure Portal, go to your Static Web App
 2. Navigate to **Authentication** (or **Configuration** > **Authentication**)
 3. Configure identity providers (Google and/or Microsoft)
-4. Set allowed roles and permissions as needed
+4. Enable **Role management** (Invitations feature)
+5. Invite users and assign the `invited` role
+
+**For detailed step-by-step instructions, see [DEPLOY-AUTH.md](DEPLOY-AUTH.md)**.
 
 #### 7. Deploy
 
@@ -241,12 +246,13 @@ Add the entire JSON output as a secret named `AZURE_CREDENTIALS`.
 ### For End Users
 
 1. **Navigate** to your Static Web App URL (e.g., `https://wireguard-spa.azurestaticapps.net`)
-2. **Sign in** with Google or Microsoft account (if you're in the allowlist)
-3. **Click** "Request VPN" button
-4. **Wait** for the provisioning to complete (a few minutes in DRY_RUN mode, longer for real VMs)
-5. **Download** the `wireguard.conf` file
-6. **Import** into your WireGuard client (mobile or desktop)
-7. **Connect** and enjoy your VPN!
+2. **Sign in** with Google or Microsoft account
+3. **Verify invitation** - You must be invited and assigned the `invited` role (see [DEPLOY-AUTH.md](DEPLOY-AUTH.md))
+4. **Click** "Request VPN" button
+5. **Wait** for the provisioning to complete (a few minutes in DRY_RUN mode, longer for real VMs)
+6. **Download** the `wireguard.conf` file
+7. **Import** into your WireGuard client (mobile or desktop)
+8. **Connect** and enjoy your VPN!
 
 The VM will automatically be torn down after 30 minutes.
 
@@ -331,7 +337,8 @@ Since the SPA uses CDN resources and no build step:
 
 ### Current Implementation (MVP)
 - ✅ Authentication via Azure SWA built-in auth
-- ✅ Email-based allowlist
+- ✅ Role-based authorization using SWA Invitations and `invited` role
+- ✅ Authorization enforced at SWA edge and validated in backend
 - ✅ 30-minute auto-teardown
 - ⚠️ Placeholder SSH key management
 - ⚠️ Basic error handling
