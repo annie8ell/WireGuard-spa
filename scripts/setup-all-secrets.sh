@@ -97,7 +97,8 @@ check_prerequisites() {
         log_info "Run: ./scripts/install-tools.sh"
         missing=true
     else
-        log_success "Azure CLI found: $(az version --query '\"azure-cli\"' -o tsv)"
+        # Query the azure-cli version value correctly (no extra escaped quotes)
+        log_success "Azure CLI found: $(az version --query \"azure-cli\" -o tsv)"
     fi
     
     # Check GitHub CLI
@@ -224,24 +225,43 @@ setup_service_principal() {
     
     if [[ -n "$SP_APP_ID" && "$SP_APP_ID" != "null" ]]; then
         log_warning "Service Principal '$SP_NAME' already exists (AppId: $SP_APP_ID)"
-        
-        if [[ "$FORCE" == "false" && "$NON_INTERACTIVE" == "false" ]]; then
-            echo -n "Recreate Service Principal? (y/N): "
-            read recreate
-            if [[ "$recreate" != "y" && "$recreate" != "Y" ]]; then
-                log_info "Using existing Service Principal"
-                # Get existing credentials (note: can't retrieve secret for existing SP)
-                log_warning "Cannot retrieve existing SP secret. You may need to create a new one."
-                return 0
+
+        # If force is set, delete and recreate
+        if [[ "$FORCE" == "true" ]]; then
+            log_info "--force specified: deleting existing Service Principal to recreate..."
+            az ad sp delete --id "$SP_APP_ID"
+        else
+            if [[ "$NON_INTERACTIVE" == "false" ]]; then
+                echo -n "Recreate Service Principal? (y/N): "
+                read recreate
+                if [[ "$recreate" != "y" && "$recreate" != "Y" ]]; then
+                    log_info "Using existing Service Principal"
+                    # Existing SP - cannot retrieve secret. Create a new client secret if user agrees.
+                    if [[ "$NON_INTERACTIVE" == "false" ]]; then
+                        echo -n "Create a new client secret for the existing Service Principal? (y/N): "
+                        read create_secret
+                        if [[ "$create_secret" == "y" || "$create_secret" == "Y" ]]; then
+                            log_info "Creating new client secret for existing Service Principal..."
+                            # Create new credential
+                            SP_CREDENTIALS=$(az ad sp credential reset --name "$SP_APP_ID" --query '{clientId:appId,clientSecret:password,tenantId:tenant}' -o json)
+                            SP_APP_ID=$(echo "$SP_CREDENTIALS" | jq -r '.clientId')
+                            log_success "Created new client secret for existing Service Principal"
+                            return 0
+                        else
+                            log_error "Cannot proceed without Service Principal credentials. Rerun with --force to recreate the SP or create credentials manually."
+                            exit 1
+                        fi
+                    else
+                        log_error "Existing Service Principal found but no credentials available. Rerun with --force to recreate the SP or run interactively to create a new client secret."
+                        exit 1
+                    fi
+                fi
+            else
+                log_info "Non-interactive mode: leaving existing Service Principal in place (use --force to recreate)"
+                log_error "Cannot retrieve existing SP secret. Use --force to recreate or create credentials manually and set AZURE_CREDENTIALS as a GitHub secret."
+                exit 1
             fi
-        elif [[ "$FORCE" == "false" ]]; then
-            log_info "Using existing Service Principal (use --force to recreate)"
-            return 0
         fi
-        
-        # Delete existing SP to recreate
-        log_info "Deleting existing Service Principal..."
-        az ad sp delete --id "$SP_APP_ID"
     fi
     
     # Create new Service Principal
@@ -253,6 +273,7 @@ setup_service_principal() {
         --scopes "/subscriptions/$SUBSCRIPTION_ID/resourceGroups/$RESOURCE_GROUP" \
         --sdk-auth)
     
+    # Store the full sdk-auth JSON for GitHub secret and extract the app id
     SP_CREDENTIALS="$sp_output"
     SP_APP_ID=$(echo "$sp_output" | jq -r '.clientId')
     
@@ -391,26 +412,50 @@ set_github_secrets() {
         [[ -n "$SWA_TOKEN" ]] && echo "  - AZURE_STATIC_WEB_APPS_API_TOKEN"
         return 0
     fi
+
+    # Ensure we have the repository context and that the authenticated user has access
+    if [[ -z "${REPO:-}" ]]; then
+        REPO=$(gh repo view --json nameWithOwner -q .nameWithOwner 2>/dev/null || true)
+    fi
+    if [[ -z "$REPO" ]]; then
+        log_error "Unable to determine GitHub repository or insufficient permissions to view it."
+        log_info "Run: gh auth login and grant 'repo' scopes, or run this script from within a cloned repository you own."
+        exit 1
+    fi
+    log_info "Using GitHub repository: $REPO"
     
     # Set AZURE_CREDENTIALS
     log_info "Setting AZURE_CREDENTIALS..."
-    echo "$SP_CREDENTIALS" | gh secret set AZURE_CREDENTIALS
+    if ! echo "$SP_CREDENTIALS" | gh secret set AZURE_CREDENTIALS --repo "$REPO"; then
+        log_error "Failed to set AZURE_CREDENTIALS. This commonly means the authenticated GitHub user or token lacks permissions to manage secrets for '$REPO'."
+        log_info "Ensure you ran: gh auth login (with 'repo' scopes) or use a token with 'repo' and 'admin:repo_hook' permissions."
+        exit 1
+    fi
     log_success "AZURE_CREDENTIALS set"
     
     # Set AZURE_FUNCTIONAPP_PUBLISH_PROFILE
     log_info "Setting AZURE_FUNCTIONAPP_PUBLISH_PROFILE..."
-    echo "$FUNCTION_PUBLISH_PROFILE" | gh secret set AZURE_FUNCTIONAPP_PUBLISH_PROFILE
+    if ! echo "$FUNCTION_PUBLISH_PROFILE" | gh secret set AZURE_FUNCTIONAPP_PUBLISH_PROFILE --repo "$REPO"; then
+        log_error "Failed to set AZURE_FUNCTIONAPP_PUBLISH_PROFILE for '$REPO'"
+        exit 1
+    fi
     log_success "AZURE_FUNCTIONAPP_PUBLISH_PROFILE set"
     
     # Set AZURE_FUNCTIONAPP_NAME
     log_info "Setting AZURE_FUNCTIONAPP_NAME..."
-    echo "$FUNCTION_APP_NAME" | gh secret set AZURE_FUNCTIONAPP_NAME
+    if ! echo "$FUNCTION_APP_NAME" | gh secret set AZURE_FUNCTIONAPP_NAME --repo "$REPO"; then
+        log_error "Failed to set AZURE_FUNCTIONAPP_NAME for '$REPO'"
+        exit 1
+    fi
     log_success "AZURE_FUNCTIONAPP_NAME set"
     
     # Set SWA token if available
     if [[ -n "$SWA_TOKEN" ]]; then
         log_info "Setting AZURE_STATIC_WEB_APPS_API_TOKEN..."
-        echo "$SWA_TOKEN" | gh secret set AZURE_STATIC_WEB_APPS_API_TOKEN
+        if ! echo "$SWA_TOKEN" | gh secret set AZURE_STATIC_WEB_APPS_API_TOKEN --repo "$REPO"; then
+            log_error "Failed to set AZURE_STATIC_WEB_APPS_API_TOKEN for '$REPO'"
+            exit 1
+        fi
         log_success "AZURE_STATIC_WEB_APPS_API_TOKEN set"
     fi
 }
