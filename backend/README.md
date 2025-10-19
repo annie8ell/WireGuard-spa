@@ -209,11 +209,66 @@ def validate_user(req):
 
 ## Deployment
 
-### Option 1: Using GitHub Actions
+### Deployment Options
+
+This repository supports multiple deployment workflows depending on your needs:
+
+#### Option 1: Automated CI/CD (Recommended for Regular Deployments)
+
+**Functions Deployment** (`.github/workflows/functions-deploy.yml`):
+- Triggers automatically on push to `main` when backend files change
+- Can be manually triggered via workflow dispatch
+- Uses Kudu/publish-profile deployment
+- Automatically handles `WEBSITE_RUN_FROM_PACKAGE` conflicts
+
+**Static Web App Deployment** (`.github/workflows/swa-deploy.yml`):
+- Triggers automatically on push to `main` when frontend files change
+- Deploys the SPA to Azure Static Web Apps
+
+#### Option 2: Complete Infrastructure Provisioning and Deployment
+
+**Provision and Deploy Workflow** (`.github/workflows/provision-and-deploy.yml`):
+- Manual workflow dispatch only (prevents accidental infrastructure changes)
+- Provisions all Azure resources using Bicep templates
+- Deploys both Function App and Static Web App
+- Configures all necessary settings
+- Outputs required GitHub secrets for subsequent CI/CD runs
+
+**Usage:**
+```bash
+# Via GitHub CLI
+gh workflow run provision-and-deploy.yml \
+  -f resourceGroupName=wireguard-spa-rg \
+  -f location=westeurope \
+  -f projectName=wgspa
+
+# With custom VM image (optional)
+gh workflow run provision-and-deploy.yml \
+  -f resourceGroupName=wireguard-spa-rg \
+  -f location=westeurope \
+  -f projectName=wgspa \
+  -f customVmImageId="/subscriptions/{subId}/resourceGroups/{rg}/providers/Microsoft.Compute/images/{imageName}"
+```
+
+**Custom VM Images:**
+The infrastructure supports using pre-baked VM images for faster WireGuard VM provisioning. To use a custom image:
+
+1. Create a VM image with WireGuard pre-installed (see [ARCHITECTURE_REVIEW.md](../ARCHITECTURE_REVIEW.md#32-proposed-approach-pre-baked-custom-images))
+2. Pass the image resource ID to the `provision-and-deploy` workflow
+3. Or set the `CUSTOM_VM_IMAGE_ID` environment variable in Function App settings
+
+Benefits of custom images:
+- Faster VM provisioning (1-2 minutes vs 3-5 minutes)
+- More reliable (no package installation failures)
+- Predictable versions
+
+For more details on deployment models and VM provisioning strategies, see [ARCHITECTURE_REVIEW.md](../ARCHITECTURE_REVIEW.md).
+
+### Option 3: Using GitHub Actions
 
 Push to `main` branch or trigger the `Deploy Backend` workflow manually.
 
-### Option 2: Using Azure Functions Core Tools
+### Option 4: Using Azure Functions Core Tools
 
 ```bash
 # Login to Azure
@@ -223,7 +278,7 @@ az login
 func azure functionapp publish <function-app-name>
 ```
 
-### Option 3: Using Azure CLI
+### Option 5: Using Azure CLI
 
 ```bash
 # Create deployment package
@@ -236,6 +291,12 @@ az functionapp deployment source config-zip \
   --name <function-app-name> \
   --src ../backend.zip
 ```
+
+### Deployment Architecture Notes
+
+**Important:** This repository is configured for Kudu/publish-profile deployments using file-backed content storage (`WEBSITE_CONTENTAZUREFILECONNECTIONSTRING`). If you encounter deployment failures related to `WEBSITE_RUN_FROM_PACKAGE`, the CI/CD workflows automatically detect and remove this setting to avoid conflicts.
+
+For a comprehensive discussion of deployment models, VM provisioning strategies, and architectural decisions, please review [ARCHITECTURE_REVIEW.md](../ARCHITECTURE_REVIEW.md).
 
 ## Monitoring
 
