@@ -43,36 +43,6 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt --target=".python_packages/lib/site-packages"
 
-      - name: Remove run-from-package (if present) via Kudu
-        if: ${{ secrets.AZURE_FUNCTIONAPP_PUBLISH_PROFILE != '' }}
-        env:
-          PUBLISH_PROFILE: ${{ secrets.AZURE_FUNCTIONAPP_PUBLISH_PROFILE }}
-        run: |
-          set -euo pipefail
-          if [ -z "${PUBLISH_PROFILE:-}" ]; then
-            echo "No publish profile available, skipping Kudu cleanup."
-            exit 0
-          fi
-          # Write publish profile to a temp file
-          echo "$PUBLISH_PROFILE" > /tmp/publish.xml
-          # Extract publishUrl, userName and userPWD from the publish profile using sed
-          PUBURL=$(sed -n 's/.*publishUrl="\([^"]*\)".*/\1/p' /tmp/publish.xml | head -n1)
-          USERNAME=$(sed -n 's/.*userName="\([^"]*\)".*/\1/p' /tmp/publish.xml | head -n1)
-          PASSWORD=$(sed -n 's/.*userPWD="\([^"]*\)".*/\1/p' /tmp/publish.xml | head -n1)
-
-          if [ -z "$PUBURL" ] || [ -z "$USERNAME" ] || [ -z "$PASSWORD" ]; then
-            echo "Failed to parse publish profile, skipping Kudu cleanup."
-            exit 0
-          fi
-
-          # Remove port if present (publishUrl is usually like <app>.scm.azurewebsites.net:443)
-          SCM_HOST=${PUBURL%%:*}
-
-          echo "Calling Kudu to delete WEBSITE_RUN_FROM_PACKAGE on $SCM_HOST"
-          # Attempt to delete the setting via Kudu API; ignore failures
-          curl -fsS -u "$USERNAME:$PASSWORD" -X DELETE "https://$SCM_HOST/api/settings/WEBSITE_RUN_FROM_PACKAGE" || true
-          echo "Kudu cleanup step completed."
-
       - name: Deploy to Azure Functions
         uses: Azure/functions-action@v1
         with:
