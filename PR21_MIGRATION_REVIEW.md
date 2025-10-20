@@ -1,21 +1,28 @@
 # Pull Request #21 Review: Migration to Azure Static Web Apps Functions
 
 **Pull Request**: [#21 - Migrate from Durable Functions to Azure Static Web Apps built-in Functions](https://github.com/annie8ell/WireGuard-spa/pull/21)  
-**Review Date**: 2025-10-20  
+**Review Date**: 2025-10-20 (Updated after merge)  
 **Reviewer**: GitHub Copilot Agent  
-**Status**: ✅ **APPROVED WITH RECOMMENDATIONS**
+**Status**: ✅ **MERGED - Review Updated Based on Final Implementation**
 
 ---
 
 ## Executive Summary
 
-This PR represents an excellent migration from Azure Durable Functions to Azure Static Web Apps (SWA) built-in Functions. The implementation is well-documented, architecturally sound, and follows best practices. The migration simplifies the infrastructure from 3+ Azure resources to a single SWA resource while maintaining all functionality.
+This PR successfully migrated from Azure Durable Functions to Azure Static Web Apps (SWA) built-in Functions. **The final implementation differs significantly from the initial proposal** - it uses a **pass-through architecture** with direct Azure VM provisioning rather than an upstream provider pattern.
 
 **Key Metrics:**
-- Files Changed: 45 (+1,695 lines, -2,795 lines)
-- Net Code Reduction: ~1,100 lines
+- Files Changed: 43 (+1,885 lines, -2,796 lines)
+- Net Code Reduction: ~911 lines
 - Architecture Simplification: 3+ resources → 1 resource
 - Deployment Workflows: 3 → 1
+
+**Major Implementation Change:**
+- ❌ **NOT using** upstream provider pattern (shared/upstream.py, shared/status_store.py)
+- ✅ **USING** direct Azure SDK integration (shared/vm_provisioner.py)
+- ✅ **USING** Service Principal authentication (not Managed Identity)
+- ✅ **USING** pass-through architecture (queries Azure directly, no local state)
+- ✅ **USING** role-based access ('invited' role, not email allowlist)
 
 ---
 
