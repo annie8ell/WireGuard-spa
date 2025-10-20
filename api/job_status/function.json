@@ -7,20 +7,14 @@
       "direction": "in",
       "name": "req",
       "methods": [
-        "get",
-        "post"
+        "get"
       ],
-      "route": "status"
+      "route": "job_status"
     },
     {
       "type": "http",
       "direction": "out",
       "name": "$return"
-    },
-    {
-      "name": "starter",
-      "type": "durableClient",
-      "direction": "in"
     }
   ]
 }

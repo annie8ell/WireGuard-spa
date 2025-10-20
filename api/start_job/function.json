@@ -9,17 +9,12 @@
       "methods": [
         "post"
       ],
-      "route": "start"
+      "route": "start_job"
     },
     {
       "type": "http",
       "direction": "out",
       "name": "$return"
-    },
-    {
-      "name": "starter",
-      "type": "durableClient",
-      "direction": "in"
     }
   ]
 }

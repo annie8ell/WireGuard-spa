@@ -1,3 +1,41 @@
+// ============================================================================
+// MIGRATION NOTE: This Bicep template has been updated for SWA Functions migration
+// ============================================================================
+// The Function App, Storage Account, and related resources are now DISABLED
+// as the application has migrated to Azure Static Web Apps with built-in Functions.
+//
+// Rationale:
+// - Azure Static Web Apps (SWA) now provides built-in Python Functions
+// - No separate Function App or Storage Account needed
+// - Simpler deployment and lower cost
+// - Single resource instead of multiple resources
+//
+// IMPORTANT: VM Provisioning Requirements
+// - SWA Functions do NOT support Managed Identity
+// - You must create a Service Principal with VM Contributor role
+// - Store credentials in SWA Application Settings:
+//   * AZURE_CLIENT_ID (Service Principal app ID)
+//   * AZURE_CLIENT_SECRET (Service Principal password)
+//   * AZURE_TENANT_ID (Azure AD tenant ID)
+//   * AZURE_SUBSCRIPTION_ID
+//   * AZURE_RESOURCE_GROUP
+//
+// To create the Service Principal:
+//   az ad sp create-for-rbac \
+//     --name wireguard-spa-vm-provisioner \
+//     --role "Virtual Machine Contributor" \
+//     --scopes /subscriptions/<SUBSCRIPTION_ID>/resourceGroups/<RG_NAME>
+//
+// To remove old resources from an existing deployment:
+// 1. Delete the Function App, Storage Account, and Hosting Plan via Azure Portal or CLI
+// 2. Deploy this updated template (resources below are commented out)
+//
+// If you need to revert to the old architecture:
+// 1. Uncomment the resources below
+// 2. Redeploy the template
+// 3. Use the old backend/ directory and workflows from git history
+// ============================================================================
+
 @description('Location for all resources. Defaults to resource group location.')
 param location string = resourceGroup().location
 
@@ -11,127 +49,47 @@ param projectName string
 ])
 param swaSku string = 'Free'
 
-@description('Function App runtime version')
-param functionRuntimeVersion int = 4
-
-@description('Comma-separated list of allowed email addresses')
-param allowedEmails string = 'awwsawws@gmail.com,awwsawws@hotmail.com'
-
-@description('Enable dry run mode (no actual VM creation)')
-param dryRun string = 'false'
-
 // Generate unique names
+var staticWebAppName = '${projectName}-swa'
+
+// ============================================================================
+// DISABLED: Function App and related resources
+// ============================================================================
+// The following resources are commented out as part of the migration to
+// Azure Static Web Apps with built-in Functions:
+//
+// - Storage Account (was: storageAccount)
+// - Application Insights (was: appInsights)
+// - Hosting Plan (was: hostingPlan)
+// - Function App (was: functionApp)
+// - VM Contributor Role Assignment (was: vmContributorRole for Function App MI)
+// - Network Contributor Role Assignment (was: networkContributorRole for Function App MI)
+//
+// These are no longer needed because:
+// - SWA built-in Functions don't require a separate Function App
+// - No Azure Storage needed for state management (using in-memory store)
+// - VM permissions now granted to a Service Principal (configured separately)
+// ============================================================================
+
+/*
+// Commented out - no longer needed with SWA built-in Functions
 var uniqueSuffix = uniqueString(resourceGroup().id)
 var storageAccountName = '${projectName}${uniqueSuffix}'
 var appInsightsName = '${projectName}-appinsights'
 var functionAppName = '${projectName}-func'
-var staticWebAppName = '${projectName}-swa'
 var hostingPlanName = '${projectName}-plan'
 
-// Storage Account for Function App
-resource storageAccount 'Microsoft.Storage/storageAccounts@2021-09-01' = {
-  name: storageAccountName
-  location: location
-  sku: {
-    name: 'Standard_LRS'
-  }
-  kind: 'StorageV2'
-  properties: {
-    supportsHttpsTrafficOnly: true
-    minimumTlsVersion: 'TLS1_2'
-  }
-}
+resource storageAccount 'Microsoft.Storage/storageAccounts@2021-09-01' = { ... }
+resource appInsights 'Microsoft.Insights/components@2020-02-02' = { ... }
+resource hostingPlan 'Microsoft.Web/serverfarms@2021-03-01' = { ... }
+resource functionApp 'Microsoft.Web/sites@2021-03-01' = { ... }
+resource vmContributorRole 'Microsoft.Authorization/roleAssignments@2020-04-01-preview' = { ... }
+resource networkContributorRole 'Microsoft.Authorization/roleAssignments@2020-04-01-preview' = { ... }
+*/
 
-// Application Insights
-resource appInsights 'Microsoft.Insights/components@2020-02-02' = {
-  name: appInsightsName
-  location: location
-  kind: 'web'
-  properties: {
-    Application_Type: 'web'
-    Request_Source: 'rest'
-  }
-}
-
-// Consumption Plan for Function App
-resource hostingPlan 'Microsoft.Web/serverfarms@2021-03-01' = {
-  name: hostingPlanName
-  location: location
-  sku: {
-    name: 'Y1'
-    tier: 'Dynamic'
-  }
-  properties: {
-    reserved: true // Linux
-  }
-}
-
-// Function App with system-assigned managed identity
-resource functionApp 'Microsoft.Web/sites@2021-03-01' = {
-  name: functionAppName
-  location: location
-  kind: 'functionapp,linux'
-  identity: {
-    type: 'SystemAssigned'
-  }
-  properties: {
-    serverFarmId: hostingPlan.id
-    siteConfig: {
-      linuxFxVersion: 'Python|3.9'
-      appSettings: [
-        {
-          name: 'AzureWebJobsStorage'
-          value: 'DefaultEndpointsProtocol=https;AccountName=${storageAccount.name};EndpointSuffix=${environment().suffixes.storage};AccountKey=${storageAccount.listKeys().keys[0].value}'
-        }
-        {
-          name: 'WEBSITE_CONTENTAZUREFILECONNECTIONSTRING'
-          value: 'DefaultEndpointsProtocol=https;AccountName=${storageAccount.name};EndpointSuffix=${environment().suffixes.storage};AccountKey=${storageAccount.listKeys().keys[0].value}'
-        }
-        {
-          name: 'WEBSITE_CONTENTSHARE'
-          value: toLower(functionAppName)
-        }
-        {
-          name: 'FUNCTIONS_EXTENSION_VERSION'
-          value: '~${functionRuntimeVersion}'
-        }
-        {
-          name: 'FUNCTIONS_WORKER_RUNTIME'
-          value: 'python'
-        }
-        {
-          name: 'APPINSIGHTS_INSTRUMENTATIONKEY'
-          value: appInsights.properties.InstrumentationKey
-        }
-        {
-          name: 'APPLICATIONINSIGHTS_CONNECTION_STRING'
-          value: appInsights.properties.ConnectionString
-        }
-        {
-          name: 'ALLOWED_EMAILS'
-          value: allowedEmails
-        }
-        {
-          name: 'DRY_RUN'
-          value: dryRun
-        }
-        {
-          name: 'BACKEND_MODE'
-          value: 'vm'
-        }
-        {
-          name: 'AZURE_SUBSCRIPTION_ID'
-          value: subscription().subscriptionId
-        }
-        {
-          name: 'AZURE_RESOURCE_GROUP'
-          value: resourceGroup().name
-        }
-      ]
-    }
-    httpsOnly: true
-  }
-}
+// ============================================================================
+// ACTIVE: Static Web App (with built-in Functions)
+// ============================================================================
 
 // Static Web App
 resource staticWebApp 'Microsoft.Web/staticSites@2021-03-01' = {
@@ -144,31 +102,28 @@ resource staticWebApp 'Microsoft.Web/staticSites@2021-03-01' = {
   properties: {}
 }
 
-// Role assignment: Virtual Machine Contributor for Function App identity
-resource vmContributorRole 'Microsoft.Authorization/roleAssignments@2020-04-01-preview' = {
-  name: guid(resourceGroup().id, functionApp.id, 'VirtualMachineContributor')
-  scope: resourceGroup()
-  properties: {
-    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '9980e02c-c2be-4d73-94e8-173b1dc7cf3c') // Virtual Machine Contributor
-    principalId: functionApp.identity.principalId
-    principalType: 'ServicePrincipal'
-  }
-}
-
-// Role assignment: Network Contributor for Function App identity
-resource networkContributorRole 'Microsoft.Authorization/roleAssignments@2020-04-01-preview' = {
-  name: guid(resourceGroup().id, functionApp.id, 'NetworkContributor')
-  scope: resourceGroup()
-  properties: {
-    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '4d97b98b-1d4f-4787-a291-c67834d212e7') // Network Contributor
-    principalId: functionApp.identity.principalId
-    principalType: 'ServicePrincipal'
-  }
-}
-
+// ============================================================================
 // Outputs
-output functionAppName string = functionApp.name
-output functionAppHostName string = functionApp.properties.defaultHostName
+// ============================================================================
+
 output staticWebAppName string = staticWebApp.name
 output staticWebAppResourceId string = staticWebApp.id
 output staticWebAppDefaultHostName string = staticWebApp.properties.defaultHostname
+
+// ============================================================================
+// Post-Deployment Configuration Required
+// ============================================================================
+// After deploying this template, you must:
+//
+// 1. Create a Service Principal for VM provisioning:
+//    az ad sp create-for-rbac \
+//      --name wireguard-spa-vm-provisioner \
+//      --role "Virtual Machine Contributor" \
+//      --scopes /subscriptions/<SUBSCRIPTION_ID>/resourceGroups/<RG_NAME>
+//
+// 2. Configure SWA Application Settings with the Service Principal credentials
+//
+// 3. Set up SWA authentication (Google, Microsoft, etc.)
+//
+// 4. Deploy the application code via GitHub Actions
+// ============================================================================
