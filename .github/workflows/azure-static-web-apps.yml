@@ -1,0 +1,69 @@
+name: Deploy to Azure Static Web Apps
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'index.html'
+      - 'routes.json'
+      - 'staticwebapp.config.json'
+      - 'api/**'
+      - '.github/workflows/azure-static-web-apps.yml'
+  pull_request:
+    types: [opened, synchronize, reopened, closed]
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  build_and_deploy:
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.action != 'closed')
+    runs-on: ubuntu-latest
+    name: Build and Deploy to Azure Static Web Apps
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+        with:
+          submodules: true
+      
+      - name: Deploy to Azure Static Web Apps
+        id: deploy
+        uses: Azure/static-web-apps-deploy@v1
+        with:
+          azure_static_web_apps_api_token: ${{ secrets.AZURE_STATIC_WEB_APPS_API_TOKEN }}
+          repo_token: ${{ secrets.GITHUB_TOKEN }}
+          action: 'upload'
+          # App (SPA) configuration - no build step
+          app_location: '/'
+          skip_app_build: true
+          output_location: ''
+          # API configuration - Python 3.11
+          api_location: 'api'
+          api_build_command: 'pip install -r requirements.txt'
+      
+      - name: Deployment summary
+        if: success()
+        run: |
+          echo "✅ Azure Static Web Apps deployment successful"
+          echo "📦 App location: / (SPA at repo root, no build)"
+          echo "🔌 API location: api (Python 3.11)"
+          echo ""
+          echo "⚙️  Remember to configure these SWA app settings:"
+          echo "   - ALLOWED_EMAILS: Comma-separated list of authorized emails"
+          echo "   - UPSTREAM_BASE_URL: Base URL of upstream VM/tunnel provider"
+          echo "   - UPSTREAM_API_KEY: API key for upstream provider"
+          echo "   - DRY_RUN: Set to 'true' for testing without real provisioning"
+  
+  close_pull_request:
+    if: github.event_name == 'pull_request' && github.event.action == 'closed'
+    runs-on: ubuntu-latest
+    name: Close Pull Request
+    
+    steps:
+      - name: Close Pull Request
+        uses: Azure/static-web-apps-deploy@v1
+        with:
+          azure_static_web_apps_api_token: ${{ secrets.AZURE_STATIC_WEB_APPS_API_TOKEN }}
+          action: 'close'
