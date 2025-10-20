@@ -37,6 +37,18 @@ WireGuard requires kernel-level TUN/TAP device support which Azure Container Ins
 - ✅ **Download config** - WireGuard configuration downloads as `.conf` file
 - ✅ **CI/CD ready** - GitHub Actions workflows included
 
+## Migration Status
+
+**Current Architecture**: Azure Static Web Apps built-in Functions (Python 3.11) and zero-build SPA frontend (Alpine.js).
+
+This project has been migrated from Azure Durable Functions to a simplified architecture using Azure Static Web Apps built-in Functions. The current implementation:
+- Uses a single Azure Static Web App resource (no separate Function App needed)
+- Implements pass-through async pattern instead of Durable Functions orchestration
+- Maintains the same user experience with simplified backend architecture
+- See [MIGRATION.md](MIGRATION.md) for complete migration details
+
+**Documentation Updates**: This PR tidies root-level documentation to accurately reflect the current codebase, marks outdated docs (like `frontend/README.md`), and standardizes cross-document references. All setup guides have been updated to reflect the current SWA architecture.
+
 ## Prerequisites
 
 ### Azure Resources

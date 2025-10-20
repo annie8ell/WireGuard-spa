@@ -2,6 +2,8 @@
 
 This guide provides step-by-step instructions for configuring the required GitHub repository secrets and Azure role assignments needed for deploying the WireGuard SPA application. This completes the setup process started in PR #3.
 
+> **Setup Path**: This guide covers the **manual** setup approach with detailed step-by-step instructions. If you prefer automated setup (especially useful in GitHub Codespaces), see [SETUP-CREDENTIALS.md](SETUP-CREDENTIALS.md) for the automated approach.
+
 ## Prerequisites
 
 Before proceeding, ensure you have:
@@ -13,168 +15,24 @@ Before proceeding, ensure you have:
 ## Table of Contents
 
 1. [Required GitHub Secrets](#required-github-secrets)
-2. [Service Principal Setup (AZURE_CREDENTIALS)](#1-service-principal-setup-azure_credentials)
-3. [Function App Publish Profile (AZURE_FUNCTIONAPP_PUBLISH_PROFILE)](#2-function-app-publish-profile-azure_functionapp_publish_profile)
-4. [Static Web App Deployment Token (AZURE_STATIC_WEB_APPS_API_TOKEN)](#3-static-web-app-deployment-token-azure_static_web_apps_api_token)
-5. [Function App Name (AZURE_FUNCTIONAPP_NAME)](#4-function-app-name-azure_functionapp_name)
-6. [Managed Identity Role Assignments](#5-managed-identity-role-assignments)
-7. [Alternative: OIDC/Federated Credentials](#6-alternative-oidc-federated-credentials)
-8. [Verification Checklist](#verification-checklist)
+2. [Static Web App Deployment Token](#1-static-web-app-deployment-token-azure_static_web_apps_api_token)
+3. [Service Principal for VM Provisioning](#2-service-principal-for-vm-provisioning-swa-app-settings)
+4. [Alternative: OIDC/Federated Credentials](#3-alternative-oidcfederated-credentials-advanced)
+5. [Verification Checklist](#verification-checklist)
 
 ## Required GitHub Secrets
 
-The deployment workflows require the following secrets to be set in your GitHub repository:
+The deployment workflow requires the following secret to be set in your GitHub repository:
 
 | Secret Name | Purpose | Used By |
 |------------|---------|---------|
-| `AZURE_CREDENTIALS` | Service Principal for Azure authentication | Infrastructure provisioning, deployment workflows |
-| `AZURE_FUNCTIONAPP_PUBLISH_PROFILE` | Publish profile for Function App deployment | Backend deployment workflow |
-| `AZURE_STATIC_WEB_APPS_API_TOKEN` | Deployment token for Static Web App | Frontend deployment workflow |
-| `AZURE_FUNCTIONAPP_NAME` | Name of the Azure Function App | Backend deployment workflow |
+| `AZURE_STATIC_WEB_APPS_API_TOKEN` | Deployment token for Static Web App | Azure Static Web Apps deployment workflow |
 
-## 1. Service Principal Setup (AZURE_CREDENTIALS)
+> **Note**: With the current SWA built-in Functions architecture, only the SWA deployment token is needed for GitHub Actions. The Service Principal credentials for VM provisioning are configured as **SWA app settings** (not GitHub secrets) - see section 2 below.
 
-### Creating the Service Principal
+## 1. Static Web App Deployment Token (AZURE_STATIC_WEB_APPS_API_TOKEN)
 
-The Service Principal is used by GitHub Actions to authenticate with Azure and provision resources.
-
-#### Option A: Contributor Role on Subscription (Recommended for Full Control)
-
-```bash
-# Get your subscription ID
-SUBSCRIPTION_ID=$(az account show --query id -o tsv)
-
-# Create service principal with Contributor role on subscription
-az ad sp create-for-rbac \
-  --name "wireguard-spa-deployer" \
-  --role Contributor \
-  --scopes /subscriptions/$SUBSCRIPTION_ID \
-  --sdk-auth
-
-# Save the entire JSON output (it will look like this):
-# {
-#   "clientId": "xxxx",
-#   "clientSecret": "xxxx",
-#   "subscriptionId": "xxxx",
-#   "tenantId": "xxxx",
-#   "activeDirectoryEndpointUrl": "https://login.microsoftonline.com",
-#   "resourceManagerEndpointUrl": "https://management.azure.com/",
-#   "activeDirectoryGraphResourceId": "https://graph.windows.net/",
-#   "sqlManagementEndpointUrl": "https://management.core.windows.net:8443/",
-#   "galleryEndpointUrl": "https://gallery.azure.com/",
-#   "managementEndpointUrl": "https://management.core.windows.net/"
-# }
-```
-
-#### Option B: Contributor Role on Resource Group (More Restrictive)
-
-If you prefer to limit permissions to a specific resource group:
-
-```bash
-# Set your resource group name
-RESOURCE_GROUP="wireguard-spa-rg"
-SUBSCRIPTION_ID=$(az account show --query id -o tsv)
-
-# Create service principal with Contributor role on resource group
-az ad sp create-for-rbac \
-  --name "wireguard-spa-deployer" \
-  --role Contributor \
-  --scopes /subscriptions/$SUBSCRIPTION_ID/resourceGroups/$RESOURCE_GROUP \
-  --sdk-auth
-```
-
-**Note:** If using resource group scope, the resource group must already exist before creating the service principal.
-
-### Setting the GitHub Secret
-
-After creating the service principal, add the entire JSON output to GitHub:
-
-**Via GitHub Web UI:**
-1. Navigate to your repository on GitHub
-2. Go to **Settings** → **Secrets and variables** → **Actions**
-3. Click **New repository secret**
-4. Name: `AZURE_CREDENTIALS`
-5. Value: Paste the entire JSON output from the command above
-6. Click **Add secret**
-
-**Via GitHub CLI:**
-```bash
-# Copy the JSON output to a file temporarily
-cat > /tmp/azure-credentials.json << 'EOF'
-{
-  "clientId": "xxxx",
-  "clientSecret": "xxxx",
-  ...
-}
-EOF
-
-# Set the secret using gh CLI
-gh secret set AZURE_CREDENTIALS < /tmp/azure-credentials.json
-
-# Clean up
-rm /tmp/azure-credentials.json
-```
-
-## 2. Function App Publish Profile (AZURE_FUNCTIONAPP_PUBLISH_PROFILE)
-
-The Function App publish profile contains credentials for directly publishing to your Function App.
-
-### Retrieving the Publish Profile
-
-```bash
-# Set your Function App name and resource group
-FUNCTION_APP_NAME="your-function-app-name"
-RESOURCE_GROUP="wireguard-spa-rg"
-
-# Get the publish profile (XML format)
-az functionapp deployment list-publishing-profiles \
-  --name $FUNCTION_APP_NAME \
-  --resource-group $RESOURCE_GROUP \
-  --xml
-```
-
-**Alternatively**, use the helper script provided in this repository:
-
-```bash
-# Make the script executable
-chmod +x scripts/get-function-publish-profile.sh
-
-# Run the script
-./scripts/get-function-publish-profile.sh $FUNCTION_APP_NAME $RESOURCE_GROUP
-
-# Pipe directly to GitHub secret (if using gh CLI)
-./scripts/get-function-publish-profile.sh $FUNCTION_APP_NAME $RESOURCE_GROUP | \
-  gh secret set AZURE_FUNCTIONAPP_PUBLISH_PROFILE
-```
-
-### Setting the GitHub Secret
-
-**Via GitHub Web UI:**
-1. Copy the entire XML output from the command above
-2. Navigate to **Settings** → **Secrets and variables** → **Actions**
-3. Click **New repository secret**
-4. Name: `AZURE_FUNCTIONAPP_PUBLISH_PROFILE`
-5. Value: Paste the XML content
-6. Click **Add secret**
-
-**Via GitHub CLI:**
-```bash
-# Save to temporary file
-az functionapp deployment list-publishing-profiles \
-  --name $FUNCTION_APP_NAME \
-  --resource-group $RESOURCE_GROUP \
-  --xml > /tmp/publish-profile.xml
-
-# Set the secret
-gh secret set AZURE_FUNCTIONAPP_PUBLISH_PROFILE < /tmp/publish-profile.xml
-
-# Clean up
-rm /tmp/publish-profile.xml
-```
-
-## 3. Static Web App Deployment Token (AZURE_STATIC_WEB_APPS_API_TOKEN)
-
-The deployment token is required for deploying to Azure Static Web Apps.
+The deployment token is required for deploying to Azure Static Web Apps via GitHub Actions.
 
 ### Retrieving the Deployment Token
 
@@ -224,389 +82,171 @@ az staticwebapp secrets list \
   gh secret set AZURE_STATIC_WEB_APPS_API_TOKEN
 ```
 
-## 4. Function App Name (AZURE_FUNCTIONAPP_NAME)
+## 2. Service Principal for VM Provisioning (SWA App Settings)
 
-This is simply the name of your Azure Function App resource.
+The SWA built-in Functions use a Service Principal to create and manage VMs. These credentials are configured as **Azure Static Web Apps application settings** (NOT GitHub secrets).
 
-### Finding Your Function App Name
-
-```bash
-# List all Function Apps in your resource group
-az functionapp list \
-  --resource-group wireguard-spa-rg \
-  --query '[].name' -o tsv
-
-# Or get it from the infrastructure deployment output
-az deployment group show \
-  --resource-group wireguard-spa-rg \
-  --name main \
-  --query 'properties.outputs.functionAppName.value' -o tsv
-```
-
-### Setting the GitHub Secret
-
-**Via GitHub Web UI:**
-1. Copy your Function App name
-2. Navigate to **Settings** → **Secrets and variables** → **Actions**
-3. Click **New repository secret**
-4. Name: `AZURE_FUNCTIONAPP_NAME`
-5. Value: Paste your Function App name (e.g., `wgspa-func-abc123`)
-6. Click **Add secret**
-
-**Via GitHub CLI:**
-```bash
-# Replace with your actual Function App name
-gh secret set AZURE_FUNCTIONAPP_NAME -b "your-function-app-name"
-```
-
-## 5. Managed Identity Role Assignments
-
-Your Function App needs permissions to create and manage VMs for the WireGuard servers. The recommended approach is to use a system-assigned managed identity.
-
-### Enable System-Assigned Managed Identity
+### Creating the Service Principal
 
 ```bash
-# Set your Function App name and resource group
-FUNCTION_APP_NAME="your-function-app-name"
+# Get your subscription ID
+SUBSCRIPTION_ID=$(az account show --query id -o tsv)
 RESOURCE_GROUP="wireguard-spa-rg"
 
-# Enable system-assigned managed identity
-az functionapp identity assign \
-  --name $FUNCTION_APP_NAME \
-  --resource-group $RESOURCE_GROUP
-```
-
-### Assign Required Roles
-
-The Function App's managed identity needs the following roles to provision VMs:
-
-#### Get the Managed Identity Principal ID
-
-```bash
-# Get the principal ID of the managed identity
-PRINCIPAL_ID=$(az functionapp identity show \
-  --name $FUNCTION_APP_NAME \
-  --resource-group $RESOURCE_GROUP \
-  --query principalId -o tsv)
-
-echo "Managed Identity Principal ID: $PRINCIPAL_ID"
-```
-
-#### Assign Virtual Machine Contributor Role
-
-```bash
-# Set subscription ID and resource group scope
-SUBSCRIPTION_ID=$(az account show --query id -o tsv)
-SCOPE="/subscriptions/$SUBSCRIPTION_ID/resourceGroups/$RESOURCE_GROUP"
-
-# Assign Virtual Machine Contributor role
-az role assignment create \
-  --assignee $PRINCIPAL_ID \
+# Create service principal with VM Contributor role on resource group
+az ad sp create-for-rbac \
+  --name "wireguard-spa-vm-provisioner" \
   --role "Virtual Machine Contributor" \
-  --scope $SCOPE
+  --scopes /subscriptions/$SUBSCRIPTION_ID/resourceGroups/$RESOURCE_GROUP
 
-echo "Assigned Virtual Machine Contributor role"
+# Save the output values:
+# - appId (this is AZURE_CLIENT_ID)
+# - password (this is AZURE_CLIENT_SECRET)
+# - tenant (this is AZURE_TENANT_ID)
 ```
 
-#### Assign Network Contributor Role
+### Configure SWA App Settings
+
+These settings are configured in the Azure Portal or via Azure CLI:
 
 ```bash
-# Assign Network Contributor role for VNet/NIC management
-az role assignment create \
-  --assignee $PRINCIPAL_ID \
-  --role "Network Contributor" \
-  --scope $SCOPE
-
-echo "Assigned Network Contributor role"
-```
-
-#### Alternative: Assign Contributor Role (Simpler but Broader)
-
-If you prefer a simpler setup with broader permissions:
-
-```bash
-# Assign Contributor role (can do everything in the resource group)
-az role assignment create \
-  --assignee $PRINCIPAL_ID \
-  --role "Contributor" \
-  --scope $SCOPE
-
-echo "Assigned Contributor role"
-```
-
-### Verify Role Assignments
-
-```bash
-# List all role assignments for the managed identity
-az role assignment list \
-  --assignee $PRINCIPAL_ID \
-  --output table
-
-# Should show Virtual Machine Contributor and Network Contributor
-# (or just Contributor if using that approach)
-```
-
-## 6. Alternative: OIDC/Federated Credentials
-
-For enhanced security, you can use OpenID Connect (OIDC) with federated credentials instead of long-lived secrets. This eliminates the need to store `AZURE_CREDENTIALS` as a secret.
-
-### Prerequisites
-
-- Azure CLI version 2.37.0 or later
-- GitHub repository owner and name
-- Azure subscription with permissions to create federated credentials
-
-### Create an Azure AD Application
-
-```bash
-# Create an Azure AD application
-APP_NAME="wireguard-spa-github-actions"
-APP_ID=$(az ad app create --display-name $APP_NAME --query appId -o tsv)
-
-echo "Application ID: $APP_ID"
-
-# Create a service principal for the application
-az ad sp create --id $APP_ID
-```
-
-### Configure Federated Credentials
-
-```bash
-# Set your GitHub repository details
-GITHUB_ORG="your-github-username"
-GITHUB_REPO="WireGuard-spa"
-BRANCH="main"  # or your default branch
-
-# Create federated credential for main branch
-az ad app federated-credential create \
-  --id $APP_ID \
-  --parameters '{
-    "name": "wireguard-spa-main-branch",
-    "issuer": "https://token.actions.githubusercontent.com",
-    "subject": "repo:'$GITHUB_ORG'/'$GITHUB_REPO':ref:refs/heads/'$BRANCH'",
-    "audiences": ["api://AzureADTokenExchange"]
-  }'
-
-# Optionally, create credentials for pull requests
-az ad app federated-credential create \
-  --id $APP_ID \
-  --parameters '{
-    "name": "wireguard-spa-pull-requests",
-    "issuer": "https://token.actions.githubusercontent.com",
-    "subject": "repo:'$GITHUB_ORG'/'$GITHUB_REPO':pull_request",
-    "audiences": ["api://AzureADTokenExchange"]
-  }'
-```
-
-### Assign Azure Roles to the Service Principal
-
-```bash
-# Get the service principal object ID
-SP_OBJECT_ID=$(az ad sp show --id $APP_ID --query id -o tsv)
+SWA_NAME="your-static-web-app-name"
+RESOURCE_GROUP="wireguard-spa-rg"
 SUBSCRIPTION_ID=$(az account show --query id -o tsv)
 
-# Assign Contributor role
-az role assignment create \
-  --assignee $APP_ID \
-  --role Contributor \
-  --scope /subscriptions/$SUBSCRIPTION_ID
+az staticwebapp appsettings set \
+  --name $SWA_NAME \
+  --resource-group $RESOURCE_GROUP \
+  --setting-names \
+    AZURE_SUBSCRIPTION_ID="$SUBSCRIPTION_ID" \
+    AZURE_RESOURCE_GROUP="$RESOURCE_GROUP" \
+    AZURE_CLIENT_ID="<appId from above>" \
+    AZURE_CLIENT_SECRET="<password from above>" \
+    AZURE_TENANT_ID="<tenant from above>" \
+    DRY_RUN="true"
 ```
 
-### Configure GitHub Secrets for OIDC
+**Via Azure Portal:**
+1. Navigate to your Static Web App
+2. Go to **Configuration** → **Application settings**
+3. Add each setting with its corresponding value
+4. Click **Save**
 
-Instead of `AZURE_CREDENTIALS`, set these three secrets:
+> **Security Note**: Start with `DRY_RUN=true` to test without creating real VMs. Set to `false` when ready for production.
 
-```bash
-# Get tenant ID
-TENANT_ID=$(az account show --query tenantId -o tsv)
+## 3. Alternative: OIDC/Federated Credentials (Advanced)
 
-# Set secrets via gh CLI
-gh secret set AZURE_CLIENT_ID -b "$APP_ID"
-gh secret set AZURE_TENANT_ID -b "$TENANT_ID"
-gh secret set AZURE_SUBSCRIPTION_ID -b "$SUBSCRIPTION_ID"
-```
+For enhanced security with infrastructure provisioning workflows, you can use OpenID Connect (OIDC) with federated credentials instead of long-lived secrets.
 
-**Via GitHub Web UI:**
-1. Navigate to **Settings** → **Secrets and variables** → **Actions**
-2. Create three secrets:
-   - `AZURE_CLIENT_ID`: The application ID
-   - `AZURE_TENANT_ID`: Your Azure tenant ID
-   - `AZURE_SUBSCRIPTION_ID`: Your subscription ID
+> **Note**: The current SWA deployment workflow doesn't use Azure login - it only needs the SWA deployment token. OIDC would only be relevant if you add infrastructure provisioning workflows.
 
-### Update Workflow to Use OIDC
-
-In your workflow files, replace the Azure Login step:
-
-```yaml
-# OLD (using AZURE_CREDENTIALS)
-- name: Azure Login
-  uses: azure/login@v1
-  with:
-    creds: ${{ secrets.AZURE_CREDENTIALS }}
-
-# NEW (using OIDC)
-- name: Azure Login
-  uses: azure/login@v1
-  with:
-    client-id: ${{ secrets.AZURE_CLIENT_ID }}
-    tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-    subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-```
-
-### Resources
-
+For OIDC setup instructions, see:
 - [Azure AD Workload Identity Federation](https://docs.microsoft.com/azure/active-directory/workload-identities/workload-identity-federation)
 - [GitHub Actions: Azure Login with OIDC](https://github.com/marketplace/actions/azure-login#login-with-openid-connect-oidc-recommended)
 - [Configuring OpenID Connect in Azure](https://docs.github.com/actions/deployment/security-hardening-your-deployments/configuring-openid-connect-in-azure)
 
 ## Verification Checklist
 
-Before running your deployment workflows, verify that everything is configured correctly:
+Before deploying, verify that everything is configured correctly:
 
-### 1. Verify GitHub Secrets
+### 1. Verify GitHub Secret
 
-Run the validate-secrets workflow:
 ```bash
-# Via GitHub CLI
-gh workflow run validate-secrets.yml
-
-# Via GitHub Web UI
-# Navigate to Actions → Validate Secrets → Run workflow
+# Via GitHub CLI - list secrets (won't show values, just confirms it exists)
+gh secret list | grep AZURE_STATIC_WEB_APPS_API_TOKEN
 ```
 
 ### 2. Verify Service Principal
 
 ```bash
 # List service principals (find yours by name)
-az ad sp list --display-name "wireguard-spa-deployer" --query '[].{Name:displayName, AppId:appId}' -o table
+az ad sp list --display-name "wireguard-spa-vm-provisioner" --query '[].{Name:displayName, AppId:appId}' -o table
 
 # Verify role assignments for the service principal
-APP_ID=$(az ad sp list --display-name "wireguard-spa-deployer" --query '[0].appId' -o tsv)
+APP_ID=$(az ad sp list --display-name "wireguard-spa-vm-provisioner" --query '[0].appId' -o tsv)
 az role assignment list --assignee $APP_ID --output table
 ```
 
-### 3. Verify Function App Configuration
+### 3. Verify Static Web App Configuration
 
 ```bash
-# Check if managed identity is enabled
-az functionapp identity show \
-  --name $FUNCTION_APP_NAME \
-  --resource-group $RESOURCE_GROUP
+SWA_NAME="your-static-web-app-name"
+RESOURCE_GROUP="wireguard-spa-rg"
 
-# Verify Function App settings
-az functionapp config appsettings list \
-  --name $FUNCTION_APP_NAME \
-  --resource-group $RESOURCE_GROUP \
-  --output table
-
-# Check Function App status
-az functionapp show \
-  --name $FUNCTION_APP_NAME \
-  --resource-group $RESOURCE_GROUP \
-  --query '{Name:name, State:state, DefaultHostName:defaultHostName}' -o table
-```
-
-### 4. Verify Static Web App
-
-```bash
 # Check Static Web App details
 az staticwebapp show \
   --name $SWA_NAME \
   --resource-group $RESOURCE_GROUP \
-  --query '{Name:name, DefaultHostname:defaultHostname, RepositoryUrl:repositoryUrl}' -o table
+  --query '{Name:name, DefaultHostname:defaultHostname}' -o table
 
-# Verify the deployment token exists (should show the first few characters)
-az staticwebapp secrets list \
+# Verify app settings (including Service Principal credentials)
+az staticwebapp appsettings list \
   --name $SWA_NAME \
   --resource-group $RESOURCE_GROUP \
-  --query 'properties.apiKey' -o tsv | head -c 20 && echo "..."
-```
-
-### 5. Verify Role Assignments for Managed Identity
-
-```bash
-# Get managed identity principal ID
-PRINCIPAL_ID=$(az functionapp identity show \
-  --name $FUNCTION_APP_NAME \
-  --resource-group $RESOURCE_GROUP \
-  --query principalId -o tsv)
-
-# List all role assignments
-az role assignment list \
-  --assignee $PRINCIPAL_ID \
   --output table
-
-# Expected roles: Virtual Machine Contributor and Network Contributor
-# (or Contributor if using the simpler approach)
 ```
 
 ### Final Checklist
 
-- [ ] GitHub secret `AZURE_CREDENTIALS` is set (or OIDC credentials if using federated auth)
-- [ ] GitHub secret `AZURE_FUNCTIONAPP_PUBLISH_PROFILE` is set
 - [ ] GitHub secret `AZURE_STATIC_WEB_APPS_API_TOKEN` is set
-- [ ] GitHub secret `AZURE_FUNCTIONAPP_NAME` is set
-- [ ] Function App has system-assigned managed identity enabled
-- [ ] Managed identity has Virtual Machine Contributor role assigned
-- [ ] Managed identity has Network Contributor role assigned
-- [ ] Service Principal has appropriate role on subscription or resource group
-- [ ] All Azure resources are in the same resource group
-- [ ] Function App application settings are configured correctly
-- [ ] Static Web App is linked to Function App as backend (if applicable)
+- [ ] Azure Static Web App exists
+- [ ] Service Principal created with VM Contributor role
+- [ ] SWA app settings configured:
+  - [ ] `AZURE_SUBSCRIPTION_ID`
+  - [ ] `AZURE_RESOURCE_GROUP`
+  - [ ] `AZURE_CLIENT_ID`
+  - [ ] `AZURE_CLIENT_SECRET`
+  - [ ] `AZURE_TENANT_ID`
+  - [ ] `DRY_RUN` (set to "true" for testing)
+- [ ] User roles configured in SWA (assign users to 'invited' role)
 
 ## Troubleshooting
 
-### Secret Not Found Errors
+### Deployment Fails
 
-If workflows fail with "secret not found" errors:
-1. Verify the secret name is exactly as specified (case-sensitive)
-2. Check that the secret is set at the repository level, not organization level
-3. Ensure you have the correct permissions to view/edit secrets
+If SWA deployment fails:
+1. Verify the `AZURE_STATIC_WEB_APPS_API_TOKEN` secret is set correctly
+2. Check GitHub Actions workflow logs
+3. Ensure the Static Web App resource exists in Azure
+
+### VM Provisioning Fails
+
+If VM provisioning fails (after deployment):
+1. Verify Service Principal credentials in SWA app settings
+2. Check Service Principal has VM Contributor role assigned
+3. Ensure `AZURE_RESOURCE_GROUP` exists and is accessible
+4. Review SWA Function logs in Azure Portal
+5. Test with `DRY_RUN=true` first
 
 ### Permission Denied Errors
 
-If you get permission errors during deployment:
-1. Verify the service principal has the correct role assigned
-2. Check the scope of the role assignment (subscription vs resource group)
-3. Ensure the managed identity has been assigned roles
-4. Wait a few minutes for role assignments to propagate
-
-### Function App Deployment Fails
-
-If Function App deployment fails:
-1. Verify the publish profile is valid and not expired
-2. Check Function App logs in Azure Portal
-3. Ensure the Function App is running
-4. Verify Python runtime version matches (3.10)
-
-### Static Web App Deployment Fails
-
-If Static Web App deployment fails:
-1. Verify the deployment token is valid
-2. Check that the app location and output location are correct
-3. Ensure the Static Web App resource exists in Azure
+If you get permission errors:
+1. Verify the Service Principal has the correct role assigned
+2. Check the scope of the role assignment (resource group)
+3. Wait a few minutes for role assignments to propagate
 
 ## Next Steps
 
 After completing this setup:
 
-1. **Run the validation workflow** to verify all secrets are in place:
+1. **Deploy the application**:
    ```bash
-   gh workflow run validate-secrets.yml
+   # Push to main branch or manually trigger workflow
+   gh workflow run azure-static-web-apps.yml
    ```
 
-2. **Test the infrastructure workflow** with DRY_RUN mode:
-   - Ensure `DRY_RUN=true` is set in Function App settings
-   - Run the infrastructure provisioning workflow
-   - Verify deployment succeeds without creating actual VMs
+2. **Test with DRY_RUN mode**:
+   - Ensure `DRY_RUN=true` is set in SWA app settings
+   - Test the complete flow without creating actual VMs
+   - Verify authentication and UI work correctly
 
 3. **Configure authentication** in your Static Web App:
-   - Add Google and/or Microsoft identity providers
-   - Update the allowlist in Function App settings
+   - Add Google and/or Microsoft identity providers (Azure Portal)
+   - Assign users to 'invited' role in Role management
 
 4. **Enable production mode** when ready:
-   - Set `DRY_RUN=false` in Function App settings
+   - Set `DRY_RUN=false` in SWA app settings
    - Test with actual VM provisioning
    - Monitor costs and usage
 
-For more information, see the [README.md](README.md) and [DEPLOYMENT_FIX.md](DEPLOYMENT_FIX.md) files.
+For more information, see the [README.md](README.md) and [MIGRATION.md](MIGRATION.md) files.

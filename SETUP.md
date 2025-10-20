@@ -2,61 +2,47 @@
 
 This guide will help you deploy the WireGuard SPA solution from scratch.
 
+> **Setup Documentation**: For automated credential configuration, see [SETUP-CREDENTIALS.md](SETUP-CREDENTIALS.md). For manual secrets & RBAC setup, see [SETUP-SECRETS-AND-ROLES.md](SETUP-SECRETS-AND-ROLES.md).
+
 ## Step 1: Prerequisites
 
 ### Required Azure Resources
 - Azure Subscription with Contributor permissions
 - Azure CLI installed locally (optional, for manual deployment)
 
-### Required GitHub Secrets
+### Required GitHub Secret
 
-Create these secrets in your GitHub repository (Settings → Secrets and variables → Actions):
+Create this secret in your GitHub repository (Settings → Secrets and variables → Actions):
 
-#### 1. AZURE_CREDENTIALS (Required)
+#### AZURE_STATIC_WEB_APPS_API_TOKEN
 
-Service Principal JSON for infrastructure provisioning and SWA token retrieval.
+Deployment token for Azure Static Web Apps.
 
 ```bash
-# Create Service Principal with Contributor role
-az ad sp create-for-rbac \
-  --name "wireguard-spa-sp" \
-  --role contributor \
-  --scopes /subscriptions/{YOUR_SUBSCRIPTION_ID} \
-  --sdk-auth
-```
-
-Copy the entire JSON output and save it as `AZURE_CREDENTIALS` secret.
-
-#### 2. AZURE_FUNCTIONAPP_PUBLISH_PROFILE (Optional)
-
-Publish profile for Azure Functions deployment. You can skip this if you prefer to retrieve it dynamically in the workflow.
-
-To get the publish profile after infrastructure deployment:
-```bash
-az functionapp deployment list-publishing-profiles \
-  --name <function-app-name> \
+# Get the deployment token from your Static Web App
+az staticwebapp secrets list \
+  --name <your-swa-name> \
   --resource-group <resource-group-name> \
-  --xml
+  --query 'properties.apiKey' -o tsv
 ```
 
-Save the XML output as `AZURE_FUNCTIONAPP_PUBLISH_PROFILE` secret.
+Copy the token and save it as `AZURE_STATIC_WEB_APPS_API_TOKEN` secret.
 
-## Step 2: Deploy Infrastructure and Code
+## Step 2: Create Azure Static Web App
 
-### Option A: One-Click Deployment (Recommended)
+### Option A: Using Azure Portal
 
-1. Go to **Actions** → **Provision Infrastructure and Deploy**
-2. Click **Run workflow**
-3. Fill in the parameters:
-   - **Resource Group Name**: `wireguard-spa-rg` (or your preference)
-   - **Location**: `eastus` (or your preferred Azure region)
-   - **Project Name**: `wgspa` (short prefix for resource names, lowercase)
-4. Click **Run workflow**
-5. Wait ~10-15 minutes for completion
+1. Navigate to [Azure Portal](https://portal.azure.com)
+2. Click **Create a resource** → **Static Web App**
+3. Configure:
+   - **Resource Group**: Create new or use existing
+   - **Name**: `wireguard-spa`
+   - **Plan type**: Free
+   - **Region**: Choose your preferred region
+   - **Deployment details**: Select "Other" (we'll deploy via GitHub Actions)
+4. Click **Review + create** → **Create**
 
-### Option B: Manual Deployment
-
-#### Step 2.1: Deploy Infrastructure
+### Option B: Using Azure CLI
 
 ```bash
 # Login to Azure
@@ -67,35 +53,30 @@ az group create \
   --name wireguard-spa-rg \
   --location eastus
 
-# Deploy Bicep template
-az deployment group create \
+# Create Static Web App
+az staticwebapp create \
+  --name wireguard-spa \
   --resource-group wireguard-spa-rg \
-  --template-file infra/main.bicep \
-  --parameters projectName=wgspa
+  --location eastus \
+  --sku Free
 ```
 
-Save the outputs from the deployment - you'll need them for the next steps.
+## Step 3: Deploy Application
 
-#### Step 2.2: Deploy Backend
-
-```bash
-cd backend
-pip install -r requirements.txt
-
-# Deploy using Azure Functions Core Tools
-func azure functionapp publish <function-app-name>
-```
-
-Or use the **Deploy Backend** workflow in GitHub Actions.
-
-#### Step 2.3: Deploy Frontend
+### Deploy via GitHub Actions (Recommended)
 
 ```bash
-cd frontend
-npm install
-npm run build
+# Get the deployment token
+az staticwebapp secrets list \
+  --name wireguard-spa \
+  --resource-group wireguard-spa-rg \
+  --query 'properties.apiKey' -o tsv
 
-# Get SWA deployment token
+# Set as GitHub secret (see Step 1)
+gh secret set AZURE_STATIC_WEB_APPS_API_TOKEN
+
+# Push to main branch or manually trigger workflow
+gh workflow run azure-static-web-apps.yml
 SWA_TOKEN=$(az staticwebapp secrets list \
   --name <swa-name> \
   --resource-group wireguard-spa-rg \
@@ -108,23 +89,31 @@ swa deploy ./dist --deployment-token $SWA_TOKEN
 
 Or use the **Deploy Frontend** workflow in GitHub Actions.
 
-## Step 3: Post-Deployment Configuration
+## Step 4: Configure SWA App Settings
 
-### 3.1 Link Function App as Backend
+Configure Service Principal credentials for VM provisioning:
 
 1. Navigate to [Azure Portal](https://portal.azure.com)
 2. Go to your Static Web App resource
-3. In the left menu, click **Backends**
-4. Click **+ Add**
-5. Configure:
-   - **Backend resource type**: Function App
-   - **Subscription**: (select your subscription)
-   - **Resource**: (select your Function App)
-   - **Backend name**: `api`
-6. Click **Link**
-7. Wait for the configuration to propagate (~2-5 minutes)
+3. Click **Configuration** → **Application settings**
+4. Add the following settings:
+   - `AZURE_SUBSCRIPTION_ID`: Your Azure subscription ID
+   - `AZURE_RESOURCE_GROUP`: Resource group where VMs will be created
+   - `AZURE_CLIENT_ID`: Service Principal application ID
+   - `AZURE_CLIENT_SECRET`: Service Principal secret
+   - `AZURE_TENANT_ID`: Azure AD tenant ID
+   - `DRY_RUN`: Set to `true` for testing (no real VMs created)
+5. Click **Save**
 
-### 3.2 Configure Authentication Providers
+To create the Service Principal:
+```bash
+az ad sp create-for-rbac \
+  --name "wireguard-spa-vm-provisioner" \
+  --role "Virtual Machine Contributor" \
+  --scopes /subscriptions/<SUBSCRIPTION_ID>/resourceGroups/<RESOURCE_GROUP>
+```
+
+## Step 5: Configure Authentication Providers
 
 The SPA supports Google and Microsoft authentication.
 
@@ -161,31 +150,18 @@ The SPA supports Google and Microsoft authentication.
 6. For Express: Just click **Add**
 7. For Advanced: You'll need App (client) ID and Client Secret from Azure AD App Registration
 
-### 3.3 Update Allowed Users
+## Step 6: Configure User Roles
 
-By default, only these users are authorized:
-- awwsawws@gmail.com
-- awwsawws@hotmail.com
+By default, only invited users with the 'invited' role are authorized:
 
-To allow different users:
+1. Go to your Static Web App in Azure Portal
+2. Click **Configuration** → **Role management**
+3. Add users to the 'invited' role with their email addresses (e.g., `annie8ell@gmail.com` or `your-email@example.com`)
+4. Users must sign in with these exact email addresses
 
-1. Go to your Function App in Azure Portal
-2. Click **Configuration** in the left menu
-3. Find the `ALLOWED_EMAILS` app setting
-4. Click **Edit**
-5. Update the value with comma-separated email addresses
-6. Click **OK** and **Save**
+> **Note**: Replace `your-email@example.com` with actual email addresses you want to allow.
 
-Or redeploy infrastructure with custom `allowedEmails` parameter:
-```bash
-az deployment group create \
-  --resource-group wireguard-spa-rg \
-  --template-file infra/main.bicep \
-  --parameters projectName=wgspa \
-  --parameters allowedEmails="user1@example.com,user2@example.com"
-```
-
-## Step 4: Test the Application
+## Step 7: Test the Application
 
 1. Navigate to your Static Web App URL:
    ```
@@ -209,50 +185,42 @@ az deployment group create \
    - Public IP (when VM is ready)
    - Remaining time
 
-## Step 5: Monitor and Troubleshoot
+## Step 8: Monitor and Troubleshoot
 
 ### View Logs
 
-**Function App Logs:**
-1. Go to Function App in Azure Portal
-2. Click **Log stream** in the left menu
-3. Or use Application Insights for detailed logs
-
-**Static Web App Logs:**
+**SWA Function Logs:**
 1. Go to Static Web App in Azure Portal
-2. Click **Application Insights** (if configured)
+2. Click **Log stream** in the left menu
+3. Or use Application Insights (if configured)
 
 ### Common Issues
 
 #### "User not authorized" error
-- Verify your email is in the `ALLOWED_EMAILS` list
-- Check Function App configuration in Azure Portal
+- Verify user is assigned to 'invited' role in SWA Role management
+- Check SWA authentication configuration in Azure Portal
 
 #### SWA deployment fails
-- Verify `AZURE_CREDENTIALS` secret has correct permissions
-- Check workflow logs for specific errors
-- Ensure build output location matches `dist`
-
-#### Function App deployment fails
-- Verify `AZURE_FUNCTIONAPP_PUBLISH_PROFILE` secret is set
-- Check Python version matches (3.9)
-- Review Function App logs
+- Verify `AZURE_STATIC_WEB_APPS_API_TOKEN` secret is correct
+- Check GitHub Actions workflow logs for specific errors
+- Ensure the Static Web App resource exists in Azure
 
 #### VM provisioning fails
-- Verify Function App Managed Identity has role assignments
-- Check Function App logs in Application Insights
-- Try enabling dry-run mode first: set `DRY_RUN=true` in Function App settings
+- Verify Service Principal credentials in SWA app settings
+- Check Service Principal has VM Contributor role
+- Verify `AZURE_RESOURCE_GROUP` exists and is accessible
+- Try enabling dry-run mode first: set `DRY_RUN=true` in SWA app settings
 
 ### Enable Dry Run Mode
 
-To test orchestration without creating actual VMs:
+To test without creating actual VMs:
 
-1. Go to Function App → Configuration
+1. Go to Static Web App → Configuration → Application settings
 2. Set `DRY_RUN` to `true`
-3. Save and restart Function App
-4. VMs won't be created, but you'll see logs as if they were
+3. Click **Save**
+4. VMs won't be created, but you'll see the flow work end-to-end
 
-## Step 6: Cost Optimization
+## Step 9: Cost Optimization
 
 ### Monitor Costs
 - Use Azure Cost Management to track spending
@@ -260,9 +228,9 @@ To test orchestration without creating actual VMs:
 
 ### Optimize Resources
 - Use Free tier for Static Web App (upgrade to Standard only if needed)
-- Consumption plan for Function App (pay per execution)
-- Ensure VMs are destroyed after sessions (check `DRY_RUN=false`)
-- Use smallest VM size (B1s) unless you need more
+- SWA built-in Functions are included (no separate Function App cost)
+- Ensure VMs are destroyed after sessions (automatic 30-minute cleanup)
+- Use smallest VM size (B1ls) unless you need more
 
 ### Clean Up Resources
 
@@ -285,13 +253,12 @@ az group delete --name wireguard-spa-rg --yes --no-wait
 For issues or questions:
 - Review the main [README.md](README.md)
 - Check [Azure Static Web Apps documentation](https://docs.microsoft.com/azure/static-web-apps/)
-- Check [Azure Functions documentation](https://docs.microsoft.com/azure/azure-functions/)
-- Check [Azure Durable Functions documentation](https://docs.microsoft.com/azure/azure-functions/durable/)
+- Check [MIGRATION.md](MIGRATION.md) for architecture details
 
 ## Security Best Practices
 
 ✅ **Do:**
-- Use Managed Identities (already configured)
+- Use Service Principal with minimal required permissions
 - Keep secrets in Azure Key Vault (optional enhancement)
 - Review role assignments regularly
 - Monitor authentication logs
@@ -300,7 +267,7 @@ For issues or questions:
 
 ❌ **Don't:**
 - Commit secrets to source control
-- Give Function App more permissions than needed
-- Allow public access to Function endpoints (use SWA auth)
+- Give Service Principal more permissions than needed
+- Allow public access to API endpoints (use SWA auth with 'invited' role)
 - Disable HTTPS
 - Skip monitoring and logging
