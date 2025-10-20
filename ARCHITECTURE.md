@@ -1,30 +1,31 @@
 # WireGuard SPA - Architecture
 
+> **📝 Migration Note**: This architecture has been updated to reflect the migration from Azure Durable Functions to Azure Static Web Apps built-in Functions. See [MIGRATION.md](MIGRATION.md) for details.
+
 ## System Overview
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
 │                          GitHub Actions                              │
 │  ┌──────────────────────────────────────────────────────────────┐   │
-│  │  Provision Infrastructure and Deploy Workflow                 │   │
-│  │  • Creates Azure Resources (Bicep)                            │   │
-│  │  • Deploys Backend (Functions)                                │   │
-│  │  • Deploys Frontend (SWA)                                     │   │
+│  │  Azure Static Web Apps Deploy Workflow                       │   │
+│  │  • Single deployment for both SPA and API                     │   │
+│  │  • Python 3.11 for built-in Functions                        │   │
 │  └──────────────────────────────────────────────────────────────┘   │
 └─────────────────────────────────────────────────────────────────────┘
                                     │
                                     │ Deploys to
                                     ▼
 ┌─────────────────────────────────────────────────────────────────────┐
-│                          Azure Cloud                                 │
+│                      Azure Static Web App                            │
 │                                                                       │
 │  ┌────────────────────────────────────────────────────────────┐     │
-│  │  Azure Static Web App (Frontend)                           │     │
+│  │  Frontend (SPA)                                            │     │
 │  │  ┌──────────────────────────────────────────────────────┐  │     │
-│  │  │  Vue.js SPA                                          │  │     │
-│  │  │  • Authentication (Google, Microsoft)                │  │     │
-│  │  │  • Session Management UI                             │  │     │
-│  │  │  • Status Monitoring                                 │  │     │
+│  │  │  Zero-build SPA (Alpine.js + Foundation CSS)         │  │     │
+│  │  │  • Authentication UI                                 │  │     │
+│  │  │  • Job submission and status polling                 │  │     │
+│  │  │  • WireGuard config download                         │  │     │
 │  │  └──────────────────────────────────────────────────────┘  │     │
 │  │                           │                                 │     │
 │  │                           │ /.auth/login                    │     │
@@ -33,56 +34,51 @@
 │  │  │  Built-in Authentication                             │  │     │
 │  │  │  • Google OAuth                                      │  │     │
 │  │  │  • Azure AD (Microsoft)                              │  │     │
+│  │  │  • Sets X-MS-CLIENT-PRINCIPAL header                 │  │     │
 │  │  └──────────────────────────────────────────────────────┘  │     │
 │  └────────────────────────────────────────────────────────────┘     │
 │                           │                                           │
-│                           │ /api/* (authenticated)                    │
+│                           │ /api/* (from authenticated frontend)      │
 │                           ▼                                           │
 │  ┌────────────────────────────────────────────────────────────┐     │
-│  │  Azure Functions (Backend)                                 │     │
+│  │  Built-in Functions (Python 3.11)                         │     │
 │  │  ┌──────────────────────────────────────────────────────┐  │     │
-│  │  │  HTTP Triggers                                       │  │     │
-│  │  │  • StartSession: POST /api/start                     │  │     │
-│  │  │  • GetStatus: GET /api/status                        │  │     │
+│  │  │  POST /api/start_job                                 │  │     │
+│  │  │  • Validates user against allowlist                  │  │     │
+│  │  │  • Creates job with operationId                      │  │     │
+│  │  │  • Returns 202 Accepted + Location header            │  │     │
+│  │  │  • Starts background processing                      │  │     │
 │  │  └──────────────────────────────────────────────────────┘  │     │
-│  │                           │                                 │     │
-│  │                           │ Validates user                  │     │
-│  │                           ▼                                 │     │
 │  │  ┌──────────────────────────────────────────────────────┐  │     │
-│  │  │  Durable Functions Orchestrator                      │  │     │
-│  │  │  • WireGuardOrchestrator                             │  │     │
-│  │  │    ├─> ProvisionVM (Activity)                        │  │     │
-│  │  │    ├─> Wait (Timer)                                  │  │     │
-│  │  │    └─> DestroyVM (Activity)                          │  │     │
+│  │  │  GET /api/job_status?id={operationId}               │  │     │
+│  │  │  • Returns job status, progress, result/error        │  │     │
+│  │  │  • Client polls this endpoint                        │  │     │
 │  │  └──────────────────────────────────────────────────────┘  │     │
-│  │                           │                                 │     │
-│  │                           │ Uses Managed Identity           │     │
-│  │                           ▼                                 │     │
 │  │  ┌──────────────────────────────────────────────────────┐  │     │
-│  │  │  System-assigned Managed Identity                    │  │     │
-│  │  │  • VM Contributor Role                               │  │     │
-│  │  │  • Network Contributor Role                          │  │     │
+│  │  │  Shared Modules                                      │  │     │
+│  │  │  • auth.py: User validation                          │  │     │
+│  │  │  • status_store.py: In-memory job tracking           │  │     │
+│  │  │  • upstream.py: Upstream provider integration        │  │     │
 │  │  └──────────────────────────────────────────────────────┘  │     │
 │  └────────────────────────────────────────────────────────────┘     │
+└─────────────────────────────────────────────────────────────────────┘
+                           │
+                           │ Calls upstream API
+                           ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│                      Upstream Provider API                           │
+│  ┌──────────────────────────────────────────────────────────────┐   │
+│  │  POST /provision - Start VM and WireGuard setup              │   │
+│  │  GET /status/{id} - Check provisioning status                │   │
+│  └──────────────────────────────────────────────────────────────┘   │
 │                           │                                           │
-│                           │ Creates/Destroys                          │
+│                           │ Provisions and configures                 │
 │                           ▼                                           │
-│  ┌────────────────────────────────────────────────────────────┐     │
-│  │  Ephemeral Azure VMs (WireGuard Instances)                 │     │
-│  │  • Ubuntu 18.04 LTS                                        │     │
-│  │  • B1s (Standard)                                          │     │
-│  │  • WireGuard Configured                                    │     │
-│  │  • Auto-destroyed after session timeout                    │     │
-│  └────────────────────────────────────────────────────────────┘     │
-│                                                                       │
-│  ┌────────────────────────────────────────────────────────────┐     │
-│  │  Supporting Resources                                      │     │
-│  │  • Application Insights (Monitoring)                       │     │
-│  │  • Storage Account (Functions Runtime)                     │     │
-│  │  • Virtual Networks (VMs)                                  │     │
-│  │  • Public IPs (VMs)                                        │     │
-│  │  • Network Interfaces (VMs)                                │     │
-│  └────────────────────────────────────────────────────────────┘     │
+│  ┌──────────────────────────────────────────────────────────────┐   │
+│  │  Ephemeral VMs with WireGuard                                │   │
+│  │  • Created on-demand                                         │   │
+│  │  • Auto-teardown (handled by upstream)                       │   │
+│  └──────────────────────────────────────────────────────────────┘   │
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -99,113 +95,121 @@ User                    SWA                     Auth Provider
   │                      ├───────────────────────────>│
   │                      │  Redirect to Provider      │
   │                      │                            │
-  │<─────────────────────┤                            │
-  │  Redirect to Auth    │                            │
-  │                      │                            │
-  ├──────────────────────┼───────────────────────────>│
-  │                      │  Authenticate              │
-  │                      │                            │
   │<─────────────────────┼────────────────────────────┤
-  │  Auth Token          │                            │
+  │  Auth Token + Cookie │                            │
   │                      │                            │
   ├──────────────────────>│                            │
   │  Redirect back       │                            │
   │                      │                            │
   │<─────────────────────┤                            │
   │  Authenticated       │                            │
-  │  Cookie Set          │                            │
+  │  X-MS-CLIENT-        │                            │
+  │  PRINCIPAL header    │                            │
 ```
 
-### 2. Session Creation Flow
+### 2. Job Creation Flow (202 Accepted Pattern)
 
 ```
-Frontend                Backend                  Azure API
-  │                       │                          │
-  ├──────────────────────>│                          │
-  │  POST /api/start      │                          │
-  │  {duration: 3600}     │                          │
-  │                       │                          │
-  │                       ├─ Validate User           │
-  │                       │  (check ALLOWED_EMAILS)  │
-  │                       │                          │
-  │                       ├─ Start Orchestration    │
-  │                       │  (Durable Functions)     │
-  │                       │                          │
-  │                       ├─────────────────────────>│
-  │                       │  Create VM               │
-  │                       │  • VNet                  │
-  │                       │  • Public IP             │
-  │                       │  • NIC                   │
-  │                       │  • VM Instance           │
-  │                       │                          │
-  │                       │<─────────────────────────┤
-  │                       │  VM Created              │
-  │                       │  {public_ip: "1.2.3.4"} │
-  │                       │                          │
-  │<──────────────────────┤                          │
-  │  {instanceId: "..."}  │                          │
-  │                       │                          │
-  │                       ├─ Schedule Timer          │
-  │                       │  (duration seconds)      │
+Frontend            start_job Function      Status Store      Upstream API
+  │                       │                      │                  │
+  ├──────────────────────>│                      │                  │
+  │  POST /api/start_job  │                      │                  │
+  │  (authenticated)      │                      │                  │
+  │                       │                      │                  │
+  │                       ├─ Validate User       │                  │
+  │                       │  (X-MS-CLIENT-       │                  │
+  │                       │   PRINCIPAL header)  │                  │
+  │                       │                      │                  │
+  │                       ├─ Generate            │                  │
+  │                       │  operationId         │                  │
+  │                       │                      │                  │
+  │                       ├─────────────────────>│                  │
+  │                       │  Create job entry    │                  │
+  │                       │<─────────────────────┤                  │
+  │                       │                      │                  │
+  │<──────────────────────┤                      │                  │
+  │  202 Accepted         │                      │                  │
+  │  {operationId, ...}   │                      │                  │
+  │  Location header      │                      │                  │
+  │                       │                      │                  │
+  │                       ├─ Start background    │                  │
+  │                       │  thread              │                  │
+  │                       │                      │                  │
+  │                       ├─────────────────────────────────────────>│
+  │                       │  POST /provision     │                  │
+  │                       │<─────────────────────────────────────────┤
+  │                       │  {upstream_id}       │                  │
+  │                       │                      │                  │
+  │                       ├─────────────────────>│                  │
+  │                       │  Update: running     │                  │
 ```
 
-### 3. Status Monitoring Flow
+### 3. Status Polling Flow
 
 ```
-Frontend                Backend                  Orchestration
-  │                       │                          │
-  ├──────────────────────>│                          │
-  │  GET /api/status      │                          │
-  │  ?instanceId=...      │                          │
-  │                       │                          │
-  │                       ├─ Validate User           │
-  │                       │                          │
-  │                       ├─────────────────────────>│
-  │                       │  Query Status            │
-  │                       │                          │
-  │                       │<─────────────────────────┤
-  │                       │  {status: "Running",     │
-  │                       │   output: {...}}         │
-  │                       │                          │
-  │<──────────────────────┤                          │
-  │  Status Response      │                          │
-  │                       │                          │
-  ├─ Wait 5 seconds       │                          │
-  │                       │                          │
-  ├──────────────────────>│                          │
-  │  GET /api/status      │                          │
-  │  (repeat)             │                          │
+Frontend            job_status Function     Status Store      Background Thread
+  │                       │                      │                  │
+  ├──────────────────────>│                      │                  │
+  │  GET /api/job_status  │                      │                  │
+  │  ?id=operationId      │                      │                  │
+  │                       │                      │                  │
+  │                       ├─────────────────────>│                  │
+  │                       │  Get job             │                  │
+  │                       │<─────────────────────┤                  │
+  │                       │  {status: running,   │                  │
+  │                       │   progress: "..."}   │                  │
+  │                       │                      │                  │
+  │<──────────────────────┤                      │                  │
+  │  200 OK               │                      │                  │
+  │  {status, progress}   │                      │                  │
+  │                       │                      │                  │
+  ├─ Wait 5 seconds       │                      │                  │
+  │                       │                      │                  │
+  │                       │                      │                  ├─ Poll upstream
+  │                       │                      │                  │  GET /status/{id}
+  │                       │                      │                  │
+  │                       │                      │<─────────────────┤
+  │                       │                      │  Update progress │
+  │                       │                      │                  │
+  ├──────────────────────>│                      │                  │
+  │  GET /api/job_status  │                      │                  │
+  │  ?id=operationId      │                      │                  │
+  │                       │                      │                  │
+  │                       ├─────────────────────>│                  │
+  │                       │<─────────────────────┤                  │
+  │                       │  {status: completed, │                  │
+  │                       │   result: {...}}     │                  │
+  │<──────────────────────┤                      │                  │
+  │  200 OK - Completed!  │                      │                  │
+  │  {confText, ...}      │                      │                  │
 ```
 
-### 4. Session Cleanup Flow
+### 4. Auto-teardown Flow
+
+> **Note**: Auto-teardown (e.g., after 30 minutes) is now handled by the upstream provider, not by the SWA Functions. This simplifies the architecture and removes the need for durable timers.
 
 ```
-Orchestrator            Backend                  Azure API
-  │                       │                          │
-  ├─ Timer Expires        │                          │
-  │                       │                          │
-  ├──────────────────────>│                          │
-  │  Call DestroyVM       │                          │
-  │  Activity             │                          │
-  │                       │                          │
-  │                       ├─────────────────────────>│
-  │                       │  Delete VM               │
-  │                       │                          │
-  │                       ├─────────────────────────>│
-  │                       │  Delete NIC              │
-  │                       │                          │
-  │                       ├─────────────────────────>│
-  │                       │  Delete Public IP        │
-  │                       │                          │
-  │                       ├─────────────────────────>│
-  │                       │  Delete VNet             │
-  │                       │                          │
-  │                       │<─────────────────────────┤
-  │                       │  Resources Deleted       │
-  │                       │                          │
-  │<──────────────────────┤                          │
-  │  Cleanup Complete     │                          │
+Upstream Provider
+  │
+  ├─ VM Created
+  │
+  ├─ Start internal timer (30 minutes)
+  │
+  ├─ Timer expires
+  │
+  ├─ Delete VM and resources
+  │  • VM instance
+  │  • Network interfaces
+  │  • Public IPs
+  │  • Virtual networks
+  │
+  └─ Cleanup complete
 ```
+
+If the upstream provider does not support auto-teardown:
+- Consider adding a cleanup endpoint: `POST /api/cleanup?id={operationId}`
+- Frontend could call this after user disconnects
+- Or implement a scheduled cleanup job separately
 
 ## Security Architecture
 
@@ -229,18 +233,16 @@ Orchestrator            Backend                  Azure API
 │     • Validated on every API request                    │
 │     • No role-based access (future enhancement)         │
 │                                                         │
-│  4. Azure Resource Access                               │
-│     • System-assigned Managed Identity                  │
-│     • Least-privilege RBAC:                             │
-│       - VM Contributor (Resource Group scope)           │
-│       - Network Contributor (Resource Group scope)      │
-│     • No credential storage required                    │
+│  4. Upstream Provider Access                            │
+│     • API Key authentication (UPSTREAM_API_KEY)         │
+│     • Stored in SWA app settings                        │
+│     • Not exposed to frontend                           │
 │                                                         │
 │  5. Secrets Management                                  │
 │     • No secrets in code                                │
-│     • App Settings for configuration                    │
-│     • GitHub Secrets for CI/CD                          │
-│     • Managed Identity for Azure access                 │
+│     • SWA App Settings for configuration                │
+│     • GitHub Secrets for CI/CD token                    │
+│     • Upstream credentials via environment variables    │
 └─────────────────────────────────────────────────────────┘
 ```
 
@@ -254,70 +256,83 @@ Orchestrator            Backend                  Azure API
    ├─> Sends request to /api/* endpoint
    └─> Includes authentication cookie
 
-2. API Gateway (Static Web App)
+2. SWA Runtime
    ├─> Validates authentication cookie
    ├─> Extracts user principal
-   ├─> Adds x-ms-client-principal header
-   └─> Routes to Function App
+   ├─> Adds X-MS-CLIENT-PRINCIPAL header
+   └─> Routes to built-in Function
 
-3. Function App
+3. Built-in Function (start_job or job_status)
    ├─> Receives request with user principal
    ├─> Validates user email against ALLOWED_EMAILS
-   ├─> Processes request (start/status)
+   ├─> Processes request
    └─> Returns response
 
-4. Durable Functions (for start)
-   ├─> Creates orchestration instance
-   ├─> Calls ProvisionVM activity
-   ├─> Waits for duration
-   ├─> Calls DestroyVM activity
-   └─> Completes orchestration
+4. For start_job:
+   ├─> Generates operationId
+   ├─> Creates job in status store
+   ├─> Returns 202 Accepted immediately
+   ├─> Spawns background thread
+   └─> Background thread calls upstream provider
 
-5. Azure Resource Management (Managed Identity)
-   ├─> Uses Function App managed identity
-   ├─> Creates/Deletes VM resources
-   ├─> Validates RBAC permissions
-   └─> Returns operation results
+5. Background Thread / Upstream Integration
+   ├─> Calls upstream POST /provision
+   ├─> Polls upstream GET /status/{id}
+   ├─> Updates local status store
+   └─> Completes when upstream reports done
+
+6. For job_status:
+   ├─> Queries local status store
+   ├─> Returns current job status
+   └─> Client continues polling until completed/failed
 ```
 
 ## Deployment Architecture
 
-### Infrastructure as Code Flow
+### Simplified Deployment Flow
 
 ```
-GitHub Repo                  Azure                      Resources
-    │                          │                            │
-    ├─> Trigger Workflow       │                            │
-    │   (Push to main or       │                            │
-    │    manual dispatch)      │                            │
-    │                          │                            │
-    ├─────────────────────────>│                            │
-    │  Azure Login             │                            │
-    │  (Service Principal)     │                            │
-    │                          │                            │
-    ├─────────────────────────>│                            │
-    │  Deploy Bicep Template   │                            │
-    │                          │                            │
-    │                          ├───────────────────────────>│
-    │                          │  Create/Update:            │
-    │                          │  • Storage Account         │
-    │                          │  • App Insights            │
-    │                          │  • Function App            │
-    │                          │  • Static Web App          │
-    │                          │  • RBAC Assignments        │
-    │                          │                            │
-    │                          │<───────────────────────────┤
-    │                          │  Deployment Complete       │
-    │<─────────────────────────┤  (Outputs)                 │
-    │  Extract Outputs         │                            │
-    │                          │                            │
-    ├─────────────────────────>│                            │
-    │  Deploy Functions        │                            │
-    │  (Package backend/)      │                            │
-    │                          │                            │
-    ├─────────────────────────>│                            │
-    │  Deploy SWA              │                            │
-    │  (Build frontend/)       │                            │
+GitHub Repo                  Azure
+    │                          │
+    ├─> Push to main           │
+    │   or manual trigger      │
+    │                          │
+    ├─────────────────────────>│
+    │  Azure/static-web-apps-  │
+    │  deploy@v1               │
+    │                          │
+    │                          ├─> Upload SPA files
+    │                          │   (index.html, etc.)
+    │                          │
+    │                          ├─> Build Python Functions
+    │                          │   (pip install from
+    │                          │    api/requirements.txt)
+    │                          │
+    │                          ├─> Deploy to SWA
+    │                          │   • Frontend at /
+    │                          │   • API at /api/*
+    │                          │
+    │<─────────────────────────┤
+    │  Deployment Complete     │
+    │  (Single resource)       │
+```
+
+### Infrastructure Provisioning
+
+```
+Azure CLI or Portal
+    │
+    ├─> Create Static Web App
+    │   az staticwebapp create
+    │
+    ├─> Configure App Settings
+    │   • ALLOWED_EMAILS
+    │   • UPSTREAM_BASE_URL
+    │   • UPSTREAM_API_KEY
+    │   • DRY_RUN
+    │
+    └─> Configure Authentication
+        • Google/Microsoft providers
 ```
 
 ## Scalability & Performance
@@ -328,19 +343,16 @@ GitHub Repo                  Azure                      Resources
 Component              Scaling Strategy              Limits
 ─────────────────────────────────────────────────────────────
 Static Web App         Auto-scaling                  N/A
-                       (CDN-backed)                  
+Frontend               (CDN-backed)                  
 
-Function App           Consumption Plan              200 instances
-                       (Dynamic)                     (default)
-                       
-Durable Functions      Per-orchestration             Thousands of
-                       scaling                       concurrent
+SWA Functions          Auto-scaling                  Managed by Azure
+                       (serverless)                  (typically 200+ instances)
 
-VMs                    One per session               Subscription
-                       (short-lived)                 quota limits
+In-memory Store        Single instance               Limited by instance memory
+                       (can upgrade to Redis/        (upgrade for horizontal
+                       Table Storage)                scaling)
 
-Storage                Auto-scaling                  Account limits
-                       (Queue/Table)                 
+Upstream Provider      External system               Depends on provider                 
 ```
 
 ### Performance Characteristics
@@ -350,39 +362,40 @@ Operation              Latency       Notes
 ──────────────────────────────────────────────────────
 Frontend Load          < 2s          CDN-cached
 Authentication         < 3s          OAuth redirect
-Start Session          < 5s          Orchestration start
-VM Provisioning        2-5 min       Azure VM creation
-Status Check           < 500ms       Queue query
-VM Destruction         1-3 min       Resource cleanup
+POST /api/start_job    < 500ms       Returns 202 immediately
+GET /api/job_status    < 200ms       Queries in-memory store
+VM Provisioning        2-5 min       Depends on upstream provider
+Background polling     5s interval   Can be configured
 ```
 
 ## Monitoring & Observability
 
-### Telemetry Flow
+### Monitoring Options
 
 ```
-Application           Application Insights         Monitoring
-    │                          │                        │
-    ├─> Traces                 │                        │
-    │   (Function logs)         │                        │
-    │                          │                        │
-    ├─> Metrics                │                        │
-    │   (Performance)           │                        │
-    │                          │                        │
-    ├─> Dependencies           │                        │
-    │   (Azure API calls)       │                        │
-    │                          │                        │
-    └─────────────────────────>│                        │
-                               │                        │
-                               ├─> Aggregation          │
-                               │   (Time-series)        │
-                               │                        │
-                               ├─> Alerting             │
-                               │   (Thresholds)         │
-                               │                        │
-                               └───────────────────────>│
-                                                    Dashboard
+SWA Functions Logs            Azure Portal / CLI
+    │                              │
+    ├─> Function execution logs    │
+    │   (stdout/stderr)            │
+    │                              │
+    ├─> HTTP request logs          │
+    │   (status codes, latency)    │
+    │                              │
+    └─────────────────────────────>│
+                                   │
+                                   ├─> View in portal
+                                   │   (Monitoring blade)
+                                   │
+                                   └─> Stream logs
+                                       (az cli or portal)
 ```
+
+**Available monitoring:**
+- Function execution logs in Azure Portal
+- HTTP request/response logs
+- Error tracking
+- Performance metrics
+- Can integrate with Application Insights (optional)
 
 ## Cost Optimization
 
@@ -392,34 +405,107 @@ Application           Application Insights         Monitoring
 Resource              Tier              Monthly Cost (est.)
 ──────────────────────────────────────────────────────────
 Static Web App        Free              $0
-Function App          Consumption       $5-20 (usage-based)
-Storage Account       Standard LRS      $1-5
-Application Insights  Basic             $2-10
-VM (per session)      B1s               $0.01-0.02/hour
-VNet/IP/NIC          Standard          Minimal (<$5)
+SWA Functions         First 1M requests $0 (then ~$0.20/M)
+Bandwidth             First 100 GB      $0
 ───────────────────────────────────────────────────────────
-Total (baseline)                        $8-40/month
-+ VM usage                              Varies by sessions
+Azure baseline                          $0 with free tier
+Upstream costs                          Varies by provider
 ```
+
+**Upstream provider costs** (if using Azure VMs via upstream):
+- VM per session: $0.01-0.08/hour depending on size
+- Storage: Minimal (~$0.05/month per disk)
+- Networking: Minimal
+- Data egress: Variable based on VPN usage
 
 ### Cost Control Strategies
 
-1. **Ephemeral VMs**: Destroyed after session timeout
-2. **Consumption Plan**: Pay only for Function execution
-3. **Free SWA Tier**: No cost for hosting
-4. **B1s VMs**: Smallest instance for cost efficiency
-5. **Short Sessions**: Limit max duration to control VM costs
-6. **Dry Run Mode**: Test without creating actual resources
+1. **Free SWA Tier**: Sufficient for most use cases
+2. **Serverless Functions**: Pay per request, not per hour
+3. **In-memory Store**: No external storage costs (can upgrade later)
+4. **DRY_RUN Mode**: Test without provisioning resources
+5. **Short Sessions**: Upstream provider manages VM lifetime
+6. **Efficient Polling**: Balance freshness vs. API costs
 
 ## Future Architecture Enhancements
 
-1. **Multi-region deployment** for lower latency
-2. **VM pool** for faster provisioning
-3. **Custom domain** support
-4. **Advanced RBAC** with role-based access
-5. **Key Vault integration** for secrets management
-6. **Premium Functions** for lower cold-start latency
-7. **VPN Gateway** as alternative to VMs
-8. **Container support** if WireGuard in ACI becomes viable
-9. **Terraform option** alongside Bicep
-10. **ARM template export** for other deployment tools
+### Near-term Improvements
+
+1. **Persistent Status Store**: Upgrade from in-memory to Redis or Azure Table Storage for:
+   - Job persistence across function restarts
+   - Horizontal scaling support
+   - Better reliability
+
+2. **Webhook Support**: Allow upstream provider to push status updates instead of polling
+
+3. **Background Worker**: Separate polling logic into dedicated worker process
+
+### Medium-term Enhancements
+
+4. **Multi-region Support**: Deploy SWA in multiple regions for lower latency
+
+5. **Advanced RBAC**: Role-based access control beyond email allowlist
+
+6. **QR Code Generation**: Generate QR codes for mobile WireGuard config
+
+7. **Usage Analytics**: Track and report usage patterns
+
+### Long-term Vision
+
+8. **Multi-provider Support**: Abstract upstream provider interface for:
+   - Azure VMs
+   - AWS EC2
+   - GCP Compute
+   - Kubernetes pods
+
+9. **Container Support**: If WireGuard in Azure Container Instances becomes viable
+
+10. **Custom Domains**: Support custom domain mapping in SWA
+
+## Key Design Decisions
+
+### Why SWA Functions instead of Durable Functions?
+
+**Benefits:**
+- ✅ Simpler architecture (single resource)
+- ✅ Lower cost (no separate Function App or Storage)
+- ✅ Easier deployment (single workflow)
+- ✅ Better integration (frontend + API in one resource)
+- ✅ Standard REST pattern (202 Accepted)
+
+**Trade-offs:**
+- ⚠️ No built-in state management (must implement)
+- ⚠️ No durable timers (delegate to upstream)
+- ⚠️ Polling required (can add webhooks later)
+- ⚠️ Shorter timeout limits (can work around with async pattern)
+
+### Why In-memory Status Store?
+
+**Benefits:**
+- ✅ Zero external dependencies to start
+- ✅ Fast reads/writes
+- ✅ Simple implementation
+- ✅ Easy to upgrade later
+
+**Limitations:**
+- ⚠️ Lost on restart (acceptable for MVP)
+- ⚠️ Single instance only (can upgrade to Redis)
+- ⚠️ Limited by instance memory
+
+**Upgrade Path:**
+- Replace `StatusStore` class with Redis client
+- Update `get_status_store()` to return Redis-backed store
+- No API changes required
+
+### Why Upstream Provider Pattern?
+
+**Benefits:**
+- ✅ Decouples SWA from VM provisioning logic
+- ✅ Allows flexibility in backend implementation
+- ✅ Easier to test (DRY_RUN mode)
+- ✅ Can swap providers without changing API
+
+**Implementation:**
+- `api/shared/upstream.py` provides abstraction
+- Environment variables configure integration
+- TODO comments mark integration points
