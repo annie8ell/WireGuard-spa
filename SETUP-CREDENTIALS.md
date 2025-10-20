@@ -90,12 +90,11 @@ chmod +x scripts/setup-all-secrets.sh
 ./scripts/setup-all-secrets.sh
 
 # The script will:
-# 1. Discover your Azure resources (Function App, Static Web App, Resource Group)
-# 2. Create/verify the Service Principal with appropriate permissions
-# 3. Enable and configure the Function App managed identity with required roles
-# 4. Retrieve all necessary tokens and credentials
-# 5. Set all GitHub repository secrets automatically
-# 6. Validate the configuration
+# 1. Discover your Azure resources (Static Web App, Resource Group)
+# 2. Create/verify the Service Principal with appropriate permissions for VM provisioning
+# 3. Retrieve the Static Web App deployment token
+# 4. Set GitHub repository secret automatically
+# 5. Validate the configuration
 ```
 
 #### Script Options
@@ -126,23 +125,19 @@ The setup script supports several options for flexibility:
 
 The automated setup script configures the following:
 
-### GitHub Repository Secrets
+### GitHub Repository Secret
 
 | Secret Name | Description |
 |------------|-------------|
-| `AZURE_CREDENTIALS` | Service Principal credentials (JSON format) |
-| `AZURE_FUNCTIONAPP_PUBLISH_PROFILE` | Function App publish profile (XML) |
 | `AZURE_STATIC_WEB_APPS_API_TOKEN` | Static Web App deployment token |
-| `AZURE_FUNCTIONAPP_NAME` | Name of your Function App |
+
+> **Note**: With the current SWA built-in Functions architecture, only the SWA deployment token is needed for GitHub Actions. The Service Principal credentials for VM provisioning are configured as **SWA app settings** (not GitHub secrets).
 
 ### Azure Permissions
 
 The script automatically configures:
 
-1. **Service Principal** with Contributor role on your resource group
-2. **Function App Managed Identity** enabled with:
-   - Virtual Machine Contributor role
-   - Network Contributor role
+1. **Service Principal** with VM Contributor role on your resource group (configured as SWA app settings)
 
 ## Verification
 
@@ -162,15 +157,15 @@ gh run view --web
 Or manually verify:
 
 ```bash
-# Check GitHub secrets (doesn't show values, just confirms they exist)
-gh secret list
+# Check GitHub secret (doesn't show value, just confirms it exists)
+gh secret list | grep AZURE_STATIC_WEB_APPS_API_TOKEN
 
 # Check Azure Service Principal
-az ad sp list --display-name "wireguard-spa-deployer" --query '[].{Name:displayName, AppId:appId}' -o table
+az ad sp list --display-name "wireguard-spa-vm-provisioner" --query '[].{Name:displayName, AppId:appId}' -o table
 
-# Check Function App managed identity and roles
-FUNCTION_APP_NAME=$(az functionapp list --query '[0].name' -o tsv)
-az functionapp identity show --name $FUNCTION_APP_NAME --resource-group <YOUR_RG> --query principalId -o tsv
+# Check SWA app settings (Service Principal credentials)
+SWA_NAME=$(az staticwebapp list --query '[0].name' -o tsv)
+az staticwebapp appsettings list --name $SWA_NAME --resource-group <YOUR_RG> --output table
 ```
 
 ## Troubleshooting
@@ -253,55 +248,55 @@ If the script seems stuck:
 
 If you prefer manual setup or the automated script doesn't work for your scenario, see the detailed manual instructions in [SETUP-SECRETS-AND-ROLES.md](SETUP-SECRETS-AND-ROLES.md).
 
-The automated setup script (`setup-all-secrets.sh`) leverages the existing helper scripts:
-- `get-function-publish-profile.sh` - For retrieving Function App credentials
+The automated setup script (`setup-all-secrets.sh`) can leverage the existing helper script:
 - `get-swa-deploy-token.sh` - For retrieving Static Web App token
-
-This ensures consistency between automated and manual approaches. You can also use these helper scripts individually if you only need to update specific secrets.
 
 ## What's Next?
 
 After completing this setup:
 
-1. **Provision Infrastructure** (if not already done):
+1. **Deploy the Application**:
    ```bash
-   gh workflow run infra-provision-and-deploy.yml
+   # Deploy via GitHub Actions
+   gh workflow run azure-static-web-apps.yml
+   
+   # Or push to main branch
+   git push origin main
    ```
 
-2. **Deploy the Application**:
-   ```bash
-   # Deploy backend
-   gh workflow run deploy-backend.yml
-   
-   # Deploy frontend
-   gh workflow run deploy-frontend.yml
-   ```
+2. **Configure SWA App Settings**:
+   - Navigate to Azure Portal → Your Static Web App → Configuration
+   - Add Service Principal credentials for VM provisioning:
+     - `AZURE_SUBSCRIPTION_ID`
+     - `AZURE_RESOURCE_GROUP`
+     - `AZURE_CLIENT_ID`
+     - `AZURE_CLIENT_SECRET`
+     - `AZURE_TENANT_ID`
+     - `DRY_RUN=true` (for testing)
 
 3. **Configure Authentication** in your Static Web App:
    - Navigate to Azure Portal → Your Static Web App → Authentication
    - Add Google and/or Microsoft identity providers
+   - Assign users to 'invited' role in Role management
 
 4. **Test with DRY_RUN mode first**:
-   - The infrastructure workflow sets `DRY_RUN=true` by default
+   - Set `DRY_RUN=true` in SWA app settings
    - Test the complete flow without creating actual VMs
-   - When ready, set `DRY_RUN=false` in Function App settings
+   - When ready, set `DRY_RUN=false`
 
 ## Security Considerations
 
 The automated setup script:
-- Creates a Service Principal with Contributor role (resource group scoped by default)
-- Stores credentials securely as GitHub secrets
-- Uses managed identities where possible
+- Creates a Service Principal with VM Contributor role (resource group scoped)
+- Stores SWA deployment token securely as GitHub secret
+- Service Principal credentials stored as SWA app settings (not GitHub secrets)
 - Does not log sensitive information
 - Provides options to review changes before applying (dry-run mode)
 
 For production environments, consider:
-- Using OIDC/federated credentials instead of Service Principal secrets
 - Restricting Service Principal permissions to specific resources
 - Regularly rotating credentials
 - Using Azure Key Vault for additional secret management
-
-See [SETUP-SECRETS-AND-ROLES.md](SETUP-SECRETS-AND-ROLES.md) section 6 for OIDC setup instructions.
 
 ## Support
 
@@ -309,15 +304,3 @@ For issues or questions:
 - Check the [Troubleshooting](#troubleshooting) section above
 - Review [SETUP-SECRETS-AND-ROLES.md](SETUP-SECRETS-AND-ROLES.md) for detailed manual instructions
 - Open a GitHub issue with error messages and logs
-
-## Files in This Setup
-
-- `SETUP-CREDENTIALS.md` (this file) - Quick automated setup guide
-- `scripts/install-tools.sh` - Installs Azure CLI and GitHub CLI
-- `scripts/setup-all-secrets.sh` - Main automated setup script (uses helper scripts below)
-- `scripts/get-function-publish-profile.sh` - Helper script for Function App credentials (used by automated script)
-- `scripts/get-swa-deploy-token.sh` - Helper script for SWA token (used by automated script)
-- `.github/workflows/validate-secrets.yml` - Secrets validation workflow
-- `SETUP-SECRETS-AND-ROLES.md` - Detailed manual setup instructions
-
-**Note:** The automated setup script reuses the existing helper scripts to ensure consistency between automated and manual approaches.
