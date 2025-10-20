@@ -173,11 +173,10 @@ The following have been removed or disabled:
 
 Created new API structure under `api/`:
 
-- ✅ `api/start_job/` - Initiates async job, returns 202
-- ✅ `api/job_status/` - Returns job status
-- ✅ `api/shared/status_store.py` - In-memory job tracking
+- ✅ `api/start_job/` - Initiates async VM creation, returns 202 (pass-through)
+- ✅ `api/job_status/` - Queries Azure for VM status (pass-through)
 - ✅ `api/shared/vm_provisioner.py` - Direct Azure VM provisioning using Azure SDK
-- ✅ `api/shared/auth.py` - Authentication utilities (from old backend)
+- ✅ `api/shared/auth.py` - Role-based authentication ('invited' role)
 
 ### 3. Configuration Updates
 
@@ -196,6 +195,7 @@ Created new API structure under `api/`:
 ### Removed (Durable Functions specific):
 - `AzureWebJobsStorage` - No longer needed (was for Durable Functions state)
 - `FUNCTIONS_WORKER_RUNTIME` - No longer needed (replaced by SWA Functions)
+- `ALLOWED_EMAILS` - Replaced by SWA role-based authorization ('invited' role)
 
 ### Changed:
 - `AZURE_SUBSCRIPTION_ID` - Still needed, now in SWA app settings (was in Function App)
@@ -205,7 +205,6 @@ Created new API structure under `api/`:
 - `AZURE_CLIENT_ID` - Service Principal application ID (for Azure SDK authentication)
 - `AZURE_CLIENT_SECRET` - Service Principal secret (SWA Functions don't support Managed Identity)
 - `AZURE_TENANT_ID` - Azure AD tenant ID
-- `ALLOWED_EMAILS` - Comma-separated list of authorized emails (carried over)
 - `DRY_RUN` - Set to "true" for testing without real provisioning (carried over)
 
 ### Configuration in Azure Portal:
@@ -213,9 +212,14 @@ Created new API structure under `api/`:
 1. Navigate to your Azure Static Web App
 2. Go to **Configuration** → **Application settings**
 3. Add/update the environment variables listed above
-4. Save and restart the app
+4. Go to **Configuration** → **Role management**
+5. Add users to the 'invited' role (only these users can access the app)
+6. Save and restart the app
 
-**Important**: SWA Functions do NOT support Managed Identity. Azure credentials must be provided via Service Principal stored in app settings.
+**Important**: 
+- SWA Functions do NOT support Managed Identity. Azure credentials must be provided via Service Principal.
+- Authorization now uses SWA's 'invited' role instead of ALLOWED_EMAILS.
+- API functions verify the 'invited' role as defense in depth.
 
 ## Frontend Changes Required
 
@@ -306,11 +310,18 @@ if (status.status === 'completed') {
        AZURE_CLIENT_ID="<appId from Service Principal>" \
        AZURE_CLIENT_SECRET="<password from Service Principal>" \
        AZURE_TENANT_ID="<tenant from Service Principal>" \
-       ALLOWED_EMAILS="user1@example.com,user2@example.com" \
        DRY_RUN="true"
    ```
 
-5. **Deploy**:
+5. **Configure User Access**:
+   In Azure Portal:
+   - Navigate to your Static Web App
+   - Go to **Configuration** → **Role management**
+   - Click **Add** to invite users
+   - Assign users to the 'invited' role
+   - Configure identity providers (Google/Microsoft) in **Authentication**
+
+6. **Deploy**:
    - Push to `main` branch, or
    - Manually trigger the workflow from GitHub Actions UI
 
@@ -328,13 +339,14 @@ if (status.status === 'completed') {
 
 ## VM Provisioning Details
 
-The SWA Functions directly create Azure VMs using the Azure SDK:
+The SWA Functions directly create Azure VMs using the Azure SDK in a pass-through architecture:
 
 1. **Authentication**: Uses Service Principal credentials (stored in SWA app settings)
    - SWA Functions do NOT support Managed Identity
    - Service Principal must have "Virtual Machine Contributor" role
 
 2. **VM Creation** (`api/shared/vm_provisioner.py`):
+   - `create_vm()` - Starts async VM creation, returns immediately with operation ID
    - Creates Network Security Group (allows WireGuard port 51820, SSH port 22)
    - Creates Virtual Network and Subnet
    - Creates Public IP (static)
@@ -342,7 +354,12 @@ The SWA Functions directly create Azure VMs using the Azure SDK:
    - Creates VM (Standard_B1ls, Ubuntu 18.04 LTS)
    - Installs WireGuard via cloud-init
 
-3. **Auto-Teardown**:
+3. **Status Queries** (pass-through):
+   - `get_vm_status()` - Queries Azure directly for VM provisioning state
+   - No local state storage
+   - Returns current status: InProgress, Succeeded, Failed
+
+4. **Auto-Teardown**:
    - VMs should be automatically deleted after 30 minutes
    - TODO: Implement cleanup mechanism (options: scheduled function, expiry tags, separate worker)
 
@@ -353,13 +370,15 @@ The SWA Functions directly create Azure VMs using the Azure SDK:
 3. **Easier Maintenance**: Less infrastructure to manage
 4. **Better Integration**: API and frontend in same resource
 5. **Clearer Pattern**: Standard REST API with 202 Accepted pattern
+6. **Pass-Through Design**: No local state, queries Azure directly
 
 ## Trade-offs
 
-1. **No Built-in State Management**: Must implement status tracking (provided as in-memory store, can upgrade to external storage)
-2. **No Durable Timers**: Auto-teardown must be handled by upstream provider
+1. **No Built-in State Management**: Queries Azure directly (no local caching)
+2. **No Durable Timers**: Auto-teardown must be implemented separately
 3. **Polling Required**: Client must poll for status instead of webhooks (can be added later)
 4. **Function Execution Limits**: SWA Functions have shorter timeout than dedicated Function App
+5. **Role-Based Auth**: Must configure 'invited' role in Azure Portal
 
 ## Rollback Plan
 
