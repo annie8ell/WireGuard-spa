@@ -2,6 +2,8 @@
 
 This guide will help you deploy the WireGuard SPA solution from scratch.
 
+> **Setup Documentation**: For automated credential configuration, see [SETUP-CREDENTIALS.md](SETUP-CREDENTIALS.md). For manual secrets & RBAC setup, see [SETUP-SECRETS-AND-ROLES.md](SETUP-SECRETS-AND-ROLES.md).
+
 ## Step 1: Prerequisites
 
 ### Required Azure Resources
@@ -163,27 +165,23 @@ The SPA supports Google and Microsoft authentication.
 
 ### 3.3 Update Allowed Users
 
-By default, only these users are authorized:
-- awwsawws@gmail.com
-- awwsawws@hotmail.com
+By default, only invited users with the 'invited' role are authorized. To configure which users can access your deployment:
 
-To allow different users:
+1. Go to your Static Web App in Azure Portal
+2. Click **Configuration** → **Role management**
+3. Add users to the 'invited' role with their email addresses (e.g., `annie8ell@gmail.com` or `your-email@example.com`)
+4. Users must sign in with these exact email addresses
 
-1. Go to your Function App in Azure Portal
-2. Click **Configuration** in the left menu
-3. Find the `ALLOWED_EMAILS` app setting
-4. Click **Edit**
-5. Update the value with comma-separated email addresses
-6. Click **OK** and **Save**
-
-Or redeploy infrastructure with custom `allowedEmails` parameter:
+Or update the seed configuration during infrastructure provisioning:
 ```bash
 az deployment group create \
   --resource-group wireguard-spa-rg \
   --template-file infra/main.bicep \
   --parameters projectName=wgspa \
-  --parameters allowedEmails="user1@example.com,user2@example.com"
+  --parameters allowedEmails="annie8ell@gmail.com,your-email@example.com"
 ```
+
+> **Note**: Replace `your-email@example.com` with actual email addresses you want to allow.
 
 ## Step 4: Test the Application
 

@@ -2,6 +2,8 @@
 
 This guide provides a streamlined, automated approach to set up all required GitHub secrets and Azure permissions for the WireGuard SPA deployment from GitHub Codespaces (ideal for iPad or browser-based workflows).
 
+> **Setup Path**: This guide covers the **automated** credentials configuration approach. If you prefer manual setup or need more control, see [SETUP-SECRETS-AND-ROLES.md](SETUP-SECRETS-AND-ROLES.md) for detailed manual instructions.
+
 ## Overview
 
 This guide provides automation scripts that:

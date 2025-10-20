@@ -27,7 +27,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Configuration management (`shared/config.py`)
   - Authentication and authorization (`shared/auth.py`)
   - Azure VM lifecycle management (`shared/vm_manager.py`)
-- Default allowed users configuration (awwsawws@gmail.com, awwsawws@hotmail.com)
+- Default allowed users configuration (seed example: annie8ell@gmail.com)
 - Dry-run mode for testing without creating actual resources
 - Backend mode selection (VM/ACI)
 

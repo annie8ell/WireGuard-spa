@@ -1,18 +1,26 @@
 # Validation Results - WireGuard On-Demand Launcher
 
+> **Migration Note**: This project migrated from Azure Durable Functions to SWA built-in Functions. Some legacy validation notes referencing Durable Functions remain for historical context; see [MIGRATION.md](MIGRATION.md) for migration details.
+
 This document summarizes the validation tests performed on the scaffolded solution.
 
 ## ✅ Code Validation
 
 ### Python Syntax
 All Python files have been validated for syntax correctness:
-- ✓ `backend/shared/auth.py`
-- ✓ `backend/shared/wireguard.py`
-- ✓ `backend/functions/http_start/__init__.py`
-- ✓ `backend/functions/orchestrator/__init__.py`
-- ✓ `backend/functions/create_vm_and_wireguard/__init__.py`
-- ✓ `backend/functions/teardown_vm/__init__.py`
-- ✓ `backend/functions/status_proxy/__init__.py`
+- ✓ `api/shared/auth.py` (current SWA Functions)
+- ✓ `api/shared/vm_provisioner.py` (current SWA Functions)
+- ✓ `api/start_job/__init__.py` (current SWA Functions)
+- ✓ `api/job_status/__init__.py` (current SWA Functions)
+
+**Legacy (for reference only):**
+- `backend/shared/auth.py`
+- `backend/shared/wireguard.py`
+- `backend/functions/http_start/__init__.py`
+- `backend/functions/orchestrator/__init__.py`
+- `backend/functions/create_vm_and_wireguard/__init__.py`
+- `backend/functions/teardown_vm/__init__.py`
+- `backend/functions/status_proxy/__init__.py`
 
 ### JSON Structure
 All JSON configuration files are valid:
@@ -119,27 +127,34 @@ All states are properly styled with:
 
 ## ✅ File Structure
 
-Complete file structure as designed:
+Complete file structure (current architecture with SWA built-in Functions):
 ```
 .
-├── index.html                          # SPA entry point
+├── index.html                          # SPA entry point (zero-build)
 ├── routes.json                         # SWA routing
+├── staticwebapp.config.json            # SWA configuration
 ├── .github/workflows/
-│   ├── swa-deploy.yml                 # SWA CI/CD
-│   └── functions-deploy.yml           # Functions CI/CD
-└── backend/
-    ├── host.json                       # Function app config
+│   └── azure-static-web-apps.yml      # Single SWA deployment workflow
+└── api/                                # SWA built-in Functions (current)
+    ├── host.json                       # Functions host config
     ├── requirements.txt                # Dependencies
-    ├── local.settings.json.template    # Local dev template
     ├── shared/                         # Shared utilities
-    │   ├── auth.py
-    │   └── wireguard.py
-    └── functions/                      # Azure Functions
-        ├── http_start/                 # Start orchestration
-        ├── orchestrator/               # Main orchestration
-        ├── create_vm_and_wireguard/    # Provision VM
-        ├── teardown_vm/                # Delete VM
-        └── status_proxy/               # Status endpoint
+    │   ├── auth.py                     # Authentication/authorization
+    │   └── vm_provisioner.py           # Direct Azure VM provisioning
+    └── [functions]/                    # API endpoints
+        ├── start_job/                  # POST /api/start_job
+        └── job_status/                 # GET /api/job_status
+```
+
+**Legacy structure (not deployed, kept for reference):**
+```
+backend/                                # Old Durable Functions implementation
+    ├── functions/
+    │   ├── http_start/                 # Start orchestration (legacy)
+    │   ├── orchestrator/               # Main orchestration (legacy)
+    │   ├── create_vm_and_wireguard/    # Provision VM (legacy)
+    │   ├── teardown_vm/                # Delete VM (legacy)
+    │   └── status_proxy/               # Status endpoint (legacy)
 ```
 
 ## ✅ Documentation
@@ -190,13 +205,14 @@ All acceptance criteria from the problem statement have been met:
    - Validated through functional testing
    - Config downloads as wireguard.conf
 
-3. ✅ **Orchestrator creates 30-minute timer**
-   - Orchestrator function uses `timedelta(minutes=30)`
-   - Calls teardown activity after timer expires
+3. ✅ **Backend implements async provisioning pattern** (current: SWA built-in Functions)
+   - API endpoints: `/api/start_job` (POST) and `/api/job_status` (GET)
+   - Uses 202 Accepted pattern for async operations
+   - VMs auto-delete after 30 minutes
+   - **Note**: Legacy Durable Functions orchestration (backend/) no longer deployed
 
 4. ✅ **CI/CD workflows exist**
-   - SWA deployment workflow ready
-   - Functions deployment workflow ready
+   - Single SWA deployment workflow (deploys both frontend and API)
    - Both workflows documented with required secrets
 
 5. ✅ **Seed allowlist user configured**

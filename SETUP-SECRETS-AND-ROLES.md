@@ -2,6 +2,8 @@
 
 This guide provides step-by-step instructions for configuring the required GitHub repository secrets and Azure role assignments needed for deploying the WireGuard SPA application. This completes the setup process started in PR #3.
 
+> **Setup Path**: This guide covers the **manual** setup approach with detailed step-by-step instructions. If you prefer automated setup (especially useful in GitHub Codespaces), see [SETUP-CREDENTIALS.md](SETUP-CREDENTIALS.md) for the automated approach.
+
 ## Prerequisites
 
 Before proceeding, ensure you have:

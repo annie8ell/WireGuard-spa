@@ -1,6 +1,14 @@
-# WireGuard Frontend (Vue.js SPA)
+# ⚠️ DEPRECATED / Archived
+
+**Archived: This frontend README describes a previous Vue/Vite implementation. The repository currently uses a zero-build SPA (index.html) with Alpine.js — see [README.md](../README.md) for current instructions.**
+
+---
+
+# WireGuard Frontend (Vue.js SPA) - Historical Reference
 
 Modern, responsive Vue.js Single Page Application for managing WireGuard VPN sessions.
+
+> **Note**: This documentation is kept for historical reference only. The current implementation uses a zero-build SPA in the root `index.html` file.
 
 ## Features
 
