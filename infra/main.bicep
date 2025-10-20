@@ -10,7 +10,23 @@
 // - Simpler deployment and lower cost
 // - Single resource instead of multiple resources
 //
-// To remove these resources from an existing deployment:
+// IMPORTANT: VM Provisioning Requirements
+// - SWA Functions do NOT support Managed Identity
+// - You must create a Service Principal with VM Contributor role
+// - Store credentials in SWA Application Settings:
+//   * AZURE_CLIENT_ID (Service Principal app ID)
+//   * AZURE_CLIENT_SECRET (Service Principal password)
+//   * AZURE_TENANT_ID (Azure AD tenant ID)
+//   * AZURE_SUBSCRIPTION_ID
+//   * AZURE_RESOURCE_GROUP
+//
+// To create the Service Principal:
+//   az ad sp create-for-rbac \
+//     --name wireguard-spa-vm-provisioner \
+//     --role "Virtual Machine Contributor" \
+//     --scopes /subscriptions/<SUBSCRIPTION_ID>/resourceGroups/<RG_NAME>
+//
+// To remove old resources from an existing deployment:
 // 1. Delete the Function App, Storage Account, and Hosting Plan via Azure Portal or CLI
 // 2. Deploy this updated template (resources below are commented out)
 //
@@ -46,13 +62,13 @@ var staticWebAppName = '${projectName}-swa'
 // - Application Insights (was: appInsights)
 // - Hosting Plan (was: hostingPlan)
 // - Function App (was: functionApp)
-// - VM Contributor Role Assignment (was: vmContributorRole)
-// - Network Contributor Role Assignment (was: networkContributorRole)
+// - VM Contributor Role Assignment (was: vmContributorRole for Function App MI)
+// - Network Contributor Role Assignment (was: networkContributorRole for Function App MI)
 //
 // These are no longer needed because:
 // - SWA built-in Functions don't require a separate Function App
-// - No Azure Storage needed for state management (using in-memory or external store)
-// - Role assignments moved to upstream provider if needed
+// - No Azure Storage needed for state management (using in-memory store)
+// - VM permissions now granted to a Service Principal (configured separately)
 // ============================================================================
 
 /*
@@ -94,6 +110,20 @@ output staticWebAppName string = staticWebApp.name
 output staticWebAppResourceId string = staticWebApp.id
 output staticWebAppDefaultHostName string = staticWebApp.properties.defaultHostname
 
-// Commented out - no longer applicable
-// output functionAppName string = functionApp.name
-// output functionAppHostName string = functionApp.properties.defaultHostName
+// ============================================================================
+// Post-Deployment Configuration Required
+// ============================================================================
+// After deploying this template, you must:
+//
+// 1. Create a Service Principal for VM provisioning:
+//    az ad sp create-for-rbac \
+//      --name wireguard-spa-vm-provisioner \
+//      --role "Virtual Machine Contributor" \
+//      --scopes /subscriptions/<SUBSCRIPTION_ID>/resourceGroups/<RG_NAME>
+//
+// 2. Configure SWA Application Settings with the Service Principal credentials
+//
+// 3. Set up SWA authentication (Google, Microsoft, etc.)
+//
+// 4. Deploy the application code via GitHub Actions
+// ============================================================================
