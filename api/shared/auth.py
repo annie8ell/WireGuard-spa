@@ -1,28 +1,22 @@
 """
 Authentication and authorization utilities for Azure Static Web Apps.
+Uses SWA's built-in role-based authentication.
 """
 import base64
 import json
-import os
 import logging
 from typing import Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
 
-def get_allowed_emails() -> list:
-    """
-    Get the list of allowed email addresses from environment variable.
-    Falls back to seed list if not configured.
-    """
-    allowed_emails_str = os.environ.get('ALLOWED_EMAILS', 'annie8ell@gmail.com')
-    return [email.strip() for email in allowed_emails_str.split(',')]
-
-
 def validate_user(req) -> Tuple[bool, Optional[str], Optional[str]]:
     """
     Validates the user by decoding the X-MS-CLIENT-PRINCIPAL header
-    and checking against the allowlist.
+    and checking for the 'invited' role as defense in depth.
+    
+    SWA authentication should already enforce invited users only,
+    but this provides an additional security layer.
     
     Returns:
         tuple: (is_valid, email, error_message)
@@ -46,14 +40,16 @@ def validate_user(req) -> Tuple[bool, Optional[str], Optional[str]]:
             logger.warning('No userDetails in principal data')
             return False, None, 'User email not found'
         
-        # Check allowlist
-        allowed_emails = get_allowed_emails()
+        # Check for 'invited' role as defense in depth
+        # SWA's configuration should already restrict access to invited users,
+        # but we verify the role here for additional security
+        user_roles = principal_data.get('userRoles', [])
         
-        if user_email not in allowed_emails:
-            logger.warning(f'User {user_email} not in allowlist')
-            return False, user_email, f'User {user_email} is not authorized'
+        if 'invited' not in user_roles:
+            logger.warning(f'User {user_email} does not have invited role. Roles: {user_roles}')
+            return False, user_email, f'User {user_email} is not an invited user'
         
-        logger.info(f'User {user_email} validated successfully')
+        logger.info(f'User {user_email} validated successfully with invited role')
         return True, user_email, None
         
     except Exception as e:

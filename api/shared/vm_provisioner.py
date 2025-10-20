@@ -61,21 +61,24 @@ class VMProvisioner:
     
     def create_vm(self, vm_name: str, location: str = 'eastus', admin_username: str = 'azureuser') -> Tuple[bool, Optional[str], Optional[Dict]]:
         """
-        Create a new VM for WireGuard.
-        Returns: (success, error_message, vm_data)
+        Create a new VM for WireGuard asynchronously.
+        Returns immediately with operation details.
+        Returns: (success, error_message, operation_data)
         """
         if is_dry_run():
             logger.info(f"DRY RUN: Would create VM {vm_name} in {location}")
+            # In dry run, return immediately as "completed"
             return True, None, {
                 'vmName': vm_name,
+                'operationId': f"dry-run-{vm_name}",
+                'status': 'Succeeded',
                 'publicIp': '203.0.113.42',
                 'location': location,
-                'status': 'dry_run',
                 'confText': self._get_sample_config()
             }
         
         try:
-            logger.info(f"Creating VM {vm_name} in {location}")
+            logger.info(f"Starting async VM creation for {vm_name} in {location}")
             
             # Create VNet, Public IP, NIC, and VM
             vnet_name = f"{vm_name}-vnet"
@@ -114,11 +117,12 @@ class VMProvisioner:
             }
             
             logger.info(f"Creating NSG {nsg_name}")
-            nsg_result = self.network_client.network_security_groups.begin_create_or_update(
+            nsg_poller = self.network_client.network_security_groups.begin_create_or_update(
                 self.resource_group,
                 nsg_name,
                 nsg_params
-            ).result()
+            )
+            nsg_result = nsg_poller.result()
             
             # Step 2: Create Virtual Network
             vnet_params = {
@@ -134,11 +138,12 @@ class VMProvisioner:
             }
             
             logger.info(f"Creating VNet {vnet_name}")
-            vnet_result = self.network_client.virtual_networks.begin_create_or_update(
+            vnet_poller = self.network_client.virtual_networks.begin_create_or_update(
                 self.resource_group,
                 vnet_name,
                 vnet_params
-            ).result()
+            )
+            vnet_result = vnet_poller.result()
             
             # Step 3: Create Public IP
             public_ip_params = {
@@ -148,11 +153,12 @@ class VMProvisioner:
             }
             
             logger.info(f"Creating Public IP {public_ip_name}")
-            public_ip_result = self.network_client.public_ip_addresses.begin_create_or_update(
+            public_ip_poller = self.network_client.public_ip_addresses.begin_create_or_update(
                 self.resource_group,
                 public_ip_name,
                 public_ip_params
-            ).result()
+            )
+            public_ip_result = public_ip_poller.result()
             
             # Step 4: Create Network Interface
             nic_params = {
@@ -166,15 +172,15 @@ class VMProvisioner:
             }
             
             logger.info(f"Creating NIC {nic_name}")
-            nic_result = self.network_client.network_interfaces.begin_create_or_update(
+            nic_poller = self.network_client.network_interfaces.begin_create_or_update(
                 self.resource_group,
                 nic_name,
                 nic_params
-            ).result()
+            )
+            nic_result = nic_poller.result()
             
-            # Step 5: Create VM with cloud-init script for WireGuard
+            # Step 5: Start VM creation asynchronously
             # TODO: Generate actual WireGuard keys and configuration
-            # For now, using placeholder
             cloud_init_script = """#cloud-config
 package_upgrade: true
 packages:
@@ -229,41 +235,120 @@ runcmd:
                 }
             }
             
-            logger.info(f"Creating VM {vm_name}")
-            vm_result = self.compute_client.virtual_machines.begin_create_or_update(
+            logger.info(f"Starting async VM creation for {vm_name}")
+            # Start the operation but don't wait for it to complete
+            vm_poller = self.compute_client.virtual_machines.begin_create_or_update(
                 self.resource_group,
                 vm_name,
                 vm_params
-            ).result()
-            
-            # Get the public IP address
-            public_ip = self.network_client.public_ip_addresses.get(
-                self.resource_group,
-                public_ip_name
             )
             
-            logger.info(f"VM {vm_name} created successfully with IP {public_ip.ip_address}")
-            
-            # TODO: Generate actual WireGuard configuration
-            # For now, return placeholder
+            # Return immediately with operation details
             return True, None, {
                 'vmName': vm_name,
-                'publicIp': public_ip.ip_address,
+                'operationId': vm_name,  # Use VM name as operation ID for status queries
+                'status': 'InProgress',
                 'location': location,
-                'status': 'provisioned',
-                'confText': self._get_sample_config(public_ip.ip_address),
-                'resourceIds': {
-                    'vm': vm_result.id,
-                    'nic': nic_result.id,
-                    'publicIp': public_ip.id,
-                    'vnet': vnet_result.id,
-                    'nsg': nsg_result.id
-                }
+                'publicIpName': public_ip_name,
+                'resourceGroup': self.resource_group
             }
             
         except Exception as e:
-            logger.error(f"Error creating VM {vm_name}: {str(e)}", exc_info=True)
-            return False, f"Failed to create VM: {str(e)}", None
+            logger.error(f"Error starting VM creation for {vm_name}: {str(e)}", exc_info=True)
+            return False, f"Failed to start VM creation: {str(e)}", None
+    
+    def get_vm_status(self, vm_name: str) -> Tuple[bool, Optional[str], Optional[Dict]]:
+        """
+        Get the current status of a VM creation operation.
+        Returns: (success, error_message, status_data)
+        """
+        if is_dry_run():
+            logger.info(f"DRY RUN: Getting status for VM {vm_name}")
+            # In dry run, always return as completed
+            return True, None, {
+                'vmName': vm_name,
+                'status': 'Succeeded',
+                'publicIp': '203.0.113.42',
+                'confText': self._get_sample_config()
+            }
+        
+        try:
+            logger.info(f"Checking status for VM {vm_name}")
+            
+            # Try to get the VM
+            try:
+                vm = self.compute_client.virtual_machines.get(
+                    self.resource_group,
+                    vm_name,
+                    expand='instanceView'
+                )
+                
+                # VM exists, check its provisioning state
+                provisioning_state = vm.provisioning_state
+                
+                if provisioning_state == 'Succeeded':
+                    # Get the public IP
+                    public_ip_name = f"{vm_name}-ip"
+                    try:
+                        public_ip = self.network_client.public_ip_addresses.get(
+                            self.resource_group,
+                            public_ip_name
+                        )
+                        ip_address = public_ip.ip_address
+                    except Exception:
+                        ip_address = None
+                    
+                    # TODO: Generate actual WireGuard configuration
+                    return True, None, {
+                        'vmName': vm_name,
+                        'status': 'Succeeded',
+                        'publicIp': ip_address,
+                        'confText': self._get_sample_config(ip_address) if ip_address else None
+                    }
+                elif provisioning_state in ['Creating', 'Updating']:
+                    return True, None, {
+                        'vmName': vm_name,
+                        'status': 'InProgress',
+                        'progress': f'VM provisioning state: {provisioning_state}'
+                    }
+                elif provisioning_state == 'Failed':
+                    # Get error details if available
+                    error_msg = "VM provisioning failed"
+                    if vm.instance_view and vm.instance_view.statuses:
+                        for status in vm.instance_view.statuses:
+                            if status.level == 'Error':
+                                error_msg = status.message or error_msg
+                    
+                    return True, None, {
+                        'vmName': vm_name,
+                        'status': 'Failed',
+                        'error': error_msg
+                    }
+                else:
+                    return True, None, {
+                        'vmName': vm_name,
+                        'status': provisioning_state,
+                        'progress': f'VM state: {provisioning_state}'
+                    }
+                    
+            except Exception as get_error:
+                # VM doesn't exist yet or other error
+                error_str = str(get_error)
+                if 'ResourceNotFound' in error_str or 'NotFound' in error_str:
+                    # VM creation might still be in progress
+                    return True, None, {
+                        'vmName': vm_name,
+                        'status': 'InProgress',
+                        'progress': 'VM creation in progress (resource not yet visible)'
+                    }
+                else:
+                    # Some other error
+                    logger.error(f"Error getting VM status: {error_str}")
+                    return False, f"Error querying VM status: {error_str}", None
+            
+        except Exception as e:
+            logger.error(f"Error checking VM status for {vm_name}: {str(e)}", exc_info=True)
+            return False, f"Failed to check VM status: {str(e)}", None
     
     def delete_vm(self, vm_name: str) -> Tuple[bool, Optional[str]]:
         """

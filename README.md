@@ -9,16 +9,16 @@ A minimal end-to-end solution for provisioning on-demand WireGuard VPN servers o
 ### Frontend (SPA)
 - **Technology**: Zero-build Single Page Application using Foundation CSS and Alpine.js (via CDN)
 - **Authentication**: Azure Static Web Apps built-in authentication (Google/Microsoft)
-- **Authorization**: Email allowlist with seed user `annie8ell@gmail.com` - only invited users can access
+- **Authorization**: Invite-only access using SWA's built-in role system - only users with 'invited' role can access
 - **Deployment**: Azure Static Web Apps (single resource)
 
 ### Backend (SWA Built-in Functions)
 - **Technology**: Python 3.11 Azure Static Web Apps Functions
-- **Pattern**: Async HTTP API with 202 Accepted + status polling pattern
-- **Authentication**: Validates X-MS-CLIENT-PRINCIPAL header against allowlist
+- **Pattern**: Async HTTP API with 202 Accepted + status polling pattern (pass-through to Azure)
+- **Authentication**: Validates X-MS-CLIENT-PRINCIPAL header for 'invited' role (defense in depth)
 - **Endpoints**:
   - `POST /api/start_job` - Returns 202 with operationId, initiates async VM creation
-  - `GET /api/job_status?id={operationId}` - Returns job status/progress/result
+  - `GET /api/job_status?id={operationId}` - Queries Azure for VM status (pass-through)
 - **VM Provisioning**: Directly creates Azure VMs using Azure SDK with Service Principal credentials
 - **Auto-teardown**: VMs automatically deleted after 30 minutes
 
@@ -29,7 +29,8 @@ WireGuard requires kernel-level TUN/TAP device support which Azure Container Ins
 
 - ✅ **Zero-build SPA** - No compilation or bundling required
 - ✅ **Built-in authentication** - Uses Azure SWA auth (Google/Microsoft)
-- ✅ **Email allowlist** - Simple authorization control
+- ✅ **Invite-only access** - Role-based authorization using SWA's 'invited' role
+- ✅ **Pass-through architecture** - No local state, queries Azure directly for status
 - ✅ **DRY_RUN mode** - Test without provisioning Azure resources
 - ✅ **Automatic teardown** - VMs automatically deleted after 30 minutes
 - ✅ **Minimal cost** - Uses cheapest VM size (Standard_B1ls)
@@ -53,7 +54,6 @@ WireGuard requires kernel-level TUN/TAP device support which Azure Container Ins
 - `AZURE_CLIENT_ID` - Service Principal application ID
 - `AZURE_CLIENT_SECRET` - Service Principal secret
 - `AZURE_TENANT_ID` - Azure AD tenant ID
-- `ALLOWED_EMAILS` - Comma-separated list of authorized emails
 - `DRY_RUN` - Set to 'true' for testing without creating real VMs
 
 ## Setup Instructions
@@ -104,18 +104,22 @@ WireGuard requires kernel-level TUN/TAP device support which Azure Container Ins
        AZURE_CLIENT_ID="<appId from step 3>" \
        AZURE_CLIENT_SECRET="<password from step 3>" \
        AZURE_TENANT_ID="<tenant from step 3>" \
-       ALLOWED_EMAILS="user1@example.com,user2@example.com" \
        DRY_RUN="true"
    ```
    
    **Note**: Start with `DRY_RUN=true` to test without creating real VMs.
 
-5. **Configure Authentication**
+5. **Configure Authentication and Invited Users**
    
    In Azure Portal:
    - Navigate to your Static Web App
+   - Go to **Configuration** → **Role management**
+   - Add users to the 'invited' role (this is the only role allowed to access the app)
    - Go to **Authentication**
    - Configure identity providers (Google and/or Microsoft)
+   
+   **Important**: Only users assigned the 'invited' role can access the application. 
+   The API functions verify this role as defense in depth.
 
 6. **Deploy**
    
