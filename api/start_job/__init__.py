@@ -2,8 +2,8 @@
 Start Job Function - POST /api/start_job
 
 Returns 202 Accepted with operationId and Location header pointing to job_status endpoint.
-Initiates async VM and WireGuard tunnel provisioning.
-This is a pass-through endpoint - it starts the VM creation and returns immediately.
+Idempotent operation: Returns existing running VM or creates a new one.
+Only one WireGuard VM exists at a time per resource group.
 """
 import logging
 import json
@@ -22,13 +22,15 @@ logger = logging.getLogger(__name__)
 
 def main(req: func.HttpRequest) -> func.HttpResponse:
     """
-    HTTP endpoint to start a new VM provisioning job.
+    HTTP endpoint to get existing WireGuard VM or create a new one (idempotent).
     
     Returns 202 Accepted with:
     - operationId in response body (the VM name)
     - Location header pointing to /api/job_status?id={operationId}
+    - isExisting flag (true if returning existing VM, false if creating new)
+    - confText and publicIp (if VM is already ready)
     
-    This is a pass-through endpoint - it starts the VM creation and returns immediately.
+    Only one WireGuard VM exists at a time. Multiple calls return the same VM.
     """
     try:
         # Validate user authentication and check for 'invited' role
@@ -48,16 +50,13 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
         except ValueError:
             req_body = {}
         
-        # Generate VM name (this is the operation ID)
-        import time
-        vm_name = f"wg-{int(time.time())}"
         location = req_body.get('location', 'eastus')
         
-        logger.info(f"Starting VM creation for {vm_name} (user: {user_email})")
+        logger.info(f"Getting or creating WireGuard VM (user: {user_email})")
         
-        # Start VM creation asynchronously
+        # Get existing VM or create new one (idempotent)
         provisioner = get_vm_provisioner()
-        success, error_msg, operation_data = provisioner.create_vm(vm_name, location)
+        success, error_msg, operation_data = provisioner.get_or_create_vm(location)
         
         if not success:
             logger.error(f"Failed to start VM creation: {error_msg}")
@@ -68,20 +67,34 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
             )
         
         # Get operation ID (VM name)
-        operation_id = operation_data.get('operationId', vm_name)
+        operation_id = operation_data.get('operationId')
+        is_existing = operation_data.get('isExisting', False)
+        vm_status = operation_data.get('status', 'accepted')
         
         # Build status URL
         status_url = f"/api/job_status?id={operation_id}"
         
-        logger.info(f"VM creation started for {operation_id}, returning 202")
+        if is_existing:
+            logger.info(f"Returning existing VM {operation_id}, returning 202")
+        else:
+            logger.info(f"VM creation started for {operation_id}, returning 202")
+        
+        # Build response data
+        response_data = {
+            "operationId": operation_id,
+            "status": "accepted",
+            "statusQueryUrl": status_url,
+            "isExisting": is_existing
+        }
+        
+        # If VM is already succeeded and has config, include it
+        if vm_status == 'Succeeded' and operation_data.get('confText'):
+            response_data["confText"] = operation_data["confText"]
+            response_data["publicIp"] = operation_data.get("publicIp")
         
         # Return 202 Accepted
         return func.HttpResponse(
-            json.dumps({
-                "operationId": operation_id,
-                "status": "accepted",
-                "statusQueryUrl": status_url
-            }),
+            json.dumps(response_data),
             status_code=202,
             mimetype="application/json",
             headers={

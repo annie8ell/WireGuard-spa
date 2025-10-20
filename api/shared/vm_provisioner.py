@@ -59,12 +59,81 @@ class VMProvisioner:
             self.compute_client = ComputeManagementClient(credential, self.subscription_id)
             self.network_client = NetworkManagementClient(credential, self.subscription_id)
     
-    def create_vm(self, vm_name: str, location: str = 'eastus', admin_username: str = 'azureuser') -> Tuple[bool, Optional[str], Optional[Dict]]:
+    def get_or_create_vm(self, location: str = 'eastus', admin_username: str = 'azureuser') -> Tuple[bool, Optional[str], Optional[Dict]]:
+        """
+        Get existing running WireGuard VM or create a new one (idempotent operation).
+        Only one VM exists at a time - returns existing VM if running, creates new one otherwise.
+        Returns: (success, error_message, operation_data)
+        """
+        if is_dry_run():
+            logger.info(f"DRY RUN: Would get or create VM")
+            # In dry run, return immediately as "completed"
+            return True, None, {
+                'vmName': 'wg-vm',
+                'operationId': 'dry-run-wg-vm',
+                'status': 'Succeeded',
+                'publicIp': '203.0.113.42',
+                'location': location,
+                'confText': self._get_sample_config(),
+                'isExisting': False
+            }
+        
+        try:
+            # Check for existing VMs with wireguard tags
+            logger.info("Checking for existing WireGuard VM")
+            vms = self.compute_client.virtual_machines.list(self.resource_group)
+            
+            for vm in vms:
+                # Check if this is a WireGuard VM
+                if vm.tags and vm.tags.get('purpose') == 'wireguard-vpn':
+                    vm_name = vm.name
+                    logger.info(f"Found existing WireGuard VM: {vm_name}")
+                    
+                    # Check if it's running/succeeded
+                    if vm.provisioning_state in ['Succeeded', 'Creating', 'Updating']:
+                        # Return existing VM
+                        public_ip_name = f"{vm_name}-ip"
+                        try:
+                            public_ip = self.network_client.public_ip_addresses.get(
+                                self.resource_group,
+                                public_ip_name
+                            )
+                            ip_address = public_ip.ip_address
+                        except Exception:
+                            ip_address = None
+                        
+                        return True, None, {
+                            'vmName': vm_name,
+                            'operationId': vm_name,
+                            'status': vm.provisioning_state,
+                            'location': vm.location,
+                            'publicIp': ip_address,
+                            'publicIpName': public_ip_name,
+                            'resourceGroup': self.resource_group,
+                            'confText': self._get_sample_config(ip_address) if ip_address and vm.provisioning_state == 'Succeeded' else None,
+                            'isExisting': True
+                        }
+            
+            # No existing VM found, create a new one
+            logger.info("No existing WireGuard VM found, creating new one")
+            return self.create_vm(location, admin_username)
+            
+        except Exception as e:
+            logger.error(f"Error in get_or_create_vm: {str(e)}", exc_info=True)
+            return False, f"Failed to get or create VM: {str(e)}", None
+    
+    def create_vm(self, location: str = 'eastus', admin_username: str = 'azureuser') -> Tuple[bool, Optional[str], Optional[Dict]]:
         """
         Create a new VM for WireGuard asynchronously.
         Returns immediately with operation details.
         Returns: (success, error_message, operation_data)
+        
+        Note: Use get_or_create_vm() for idempotent operations.
         """
+        # Generate unique VM name
+        import time
+        vm_name = f"wg-{int(time.time())}"
+        
         if is_dry_run():
             logger.info(f"DRY RUN: Would create VM {vm_name} in {location}")
             # In dry run, return immediately as "completed"
@@ -74,7 +143,8 @@ class VMProvisioner:
                 'status': 'Succeeded',
                 'publicIp': '203.0.113.42',
                 'location': location,
-                'confText': self._get_sample_config()
+                'confText': self._get_sample_config(),
+                'isExisting': False
             }
         
         try:
