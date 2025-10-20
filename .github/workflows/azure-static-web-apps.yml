@@ -11,14 +11,14 @@ on:
       - 'api/**'
       - '.github/workflows/azure-static-web-apps.yml'
   pull_request:
-    types: [opened, synchronize, reopened, closed]
+    types: [closed]
     branches:
       - main
   workflow_dispatch:
 
 jobs:
   build_and_deploy:
-    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.action != 'closed')
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     name: Build and Deploy to Azure Static Web Apps
     
@@ -45,11 +45,11 @@ jobs:
       - name: Deployment summary
         if: success()
         run: |
-          echo "✅ Azure Static Web Apps deployment successful"
-          echo "📦 App location: / (SPA at repo root, no build)"
-          echo "🔌 API location: api (Python 3.11)"
+          echo "\u2705 Azure Static Web Apps deployment successful"
+          echo "\ud83d\udce6 App location: / (SPA at repo root, no build)"
+          echo "\ud83d\udd0c API location: api (Python 3.11)"
           echo ""
-          echo "⚙️  Remember to configure these SWA app settings:"
+          echo "\u2699\ufe0f  Remember to configure these SWA app settings:"
           echo "   - AZURE_SUBSCRIPTION_ID: Azure subscription ID"
           echo "   - AZURE_RESOURCE_GROUP: Resource group for VMs"
           echo "   - AZURE_CLIENT_ID: Service Principal app ID"
@@ -57,8 +57,8 @@ jobs:
           echo "   - AZURE_TENANT_ID: Azure AD tenant ID"
           echo "   - DRY_RUN: Set to 'true' for testing without real provisioning"
           echo ""
-          echo "🔐 Remember to configure user roles:"
-          echo "   - Assign users to 'invited' role in Azure Portal → Role management"
+          echo "\ud83d\udd10 Remember to configure user roles:"
+          echo "   - Assign users to 'invited' role in Azure Portal -> Role management"
   
   close_pull_request:
     if: github.event_name == 'pull_request' && github.event.action == 'closed'
