@@ -30,17 +30,6 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
     
     This is a pass-through endpoint - it starts the VM creation and returns immediately.
     """
-    # Handle CORS preflight
-    if req.method == "OPTIONS":
-        return func.HttpResponse(
-            status_code=204,
-            headers={
-                "Access-Control-Allow-Origin": "*",
-                "Access-Control-Allow-Methods": "POST, OPTIONS",
-                "Access-Control-Allow-Headers": "Content-Type, X-MS-CLIENT-PRINCIPAL"
-            }
-        )
-    
     try:
         # Validate user authentication and check for 'invited' role
         is_valid, user_email, error_msg = validate_user(req)
@@ -50,10 +39,7 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
             return func.HttpResponse(
                 json.dumps({"error": error_msg}),
                 status_code=403,
-                mimetype="application/json",
-                headers={
-                    "Access-Control-Allow-Origin": "*"
-                }
+                mimetype="application/json"
             )
         
         # Parse request body
@@ -78,10 +64,7 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
             return func.HttpResponse(
                 json.dumps({"error": error_msg}),
                 status_code=500,
-                mimetype="application/json",
-                headers={
-                    "Access-Control-Allow-Origin": "*"
-                }
+                mimetype="application/json"
             )
         
         # Get operation ID (VM name)
@@ -102,9 +85,7 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
             status_code=202,
             mimetype="application/json",
             headers={
-                "Location": status_url,
-                "Access-Control-Allow-Origin": "*",
-                "Access-Control-Expose-Headers": "Location"
+                "Location": status_url
             }
         )
         
@@ -113,8 +94,5 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
         return func.HttpResponse(
             json.dumps({"error": "Internal server error", "details": str(e)}),
             status_code=500,
-            mimetype="application/json",
-            headers={
-                "Access-Control-Allow-Origin": "*"
-            }
+            mimetype="application/json"
         )

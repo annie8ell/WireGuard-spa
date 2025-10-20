@@ -31,17 +31,6 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
     
     This is a pass-through endpoint - it queries Azure directly for VM status.
     """
-    # Handle CORS preflight
-    if req.method == "OPTIONS":
-        return func.HttpResponse(
-            status_code=204,
-            headers={
-                "Access-Control-Allow-Origin": "*",
-                "Access-Control-Allow-Methods": "GET, OPTIONS",
-                "Access-Control-Allow-Headers": "Content-Type, X-MS-CLIENT-PRINCIPAL"
-            }
-        )
-    
     try:
         # Get operation ID (VM name) from query parameters
         operation_id = req.params.get('id')
@@ -50,10 +39,7 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
             return func.HttpResponse(
                 json.dumps({"error": "Missing 'id' query parameter"}),
                 status_code=400,
-                mimetype="application/json",
-                headers={
-                    "Access-Control-Allow-Origin": "*"
-                }
+                mimetype="application/json"
             )
         
         logger.info(f"Checking status for operation {operation_id}")
@@ -67,10 +53,7 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
             return func.HttpResponse(
                 json.dumps({"error": error_msg}),
                 status_code=500,
-                mimetype="application/json",
-                headers={
-                    "Access-Control-Allow-Origin": "*"
-                }
+                mimetype="application/json"
             )
         
         # Build response from Azure data
@@ -101,7 +84,6 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
             status_code=200,
             mimetype="application/json",
             headers={
-                "Access-Control-Allow-Origin": "*",
                 "Cache-Control": "no-cache, no-store, must-revalidate"
             }
         )
@@ -111,8 +93,5 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
         return func.HttpResponse(
             json.dumps({"error": "Internal server error", "details": str(e)}),
             status_code=500,
-            mimetype="application/json",
-            headers={
-                "Access-Control-Allow-Origin": "*"
-            }
+            mimetype="application/json"
         )
