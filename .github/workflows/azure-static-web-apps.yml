@@ -39,9 +39,8 @@ jobs:
           app_location: '/'
           skip_app_build: true
           output_location: ''
-          # API configuration - Python 3.11
+          # API configuration - Python 3.11 Functions (auto-detected)
           api_location: 'api'
-          api_build_command: 'pip install -r requirements.txt'
       
       - name: Deployment summary
         if: success()
@@ -51,10 +50,15 @@ jobs:
           echo "🔌 API location: api (Python 3.11)"
           echo ""
           echo "⚙️  Remember to configure these SWA app settings:"
-          echo "   - ALLOWED_EMAILS: Comma-separated list of authorized emails"
-          echo "   - UPSTREAM_BASE_URL: Base URL of upstream VM/tunnel provider"
-          echo "   - UPSTREAM_API_KEY: API key for upstream provider"
+          echo "   - AZURE_SUBSCRIPTION_ID: Azure subscription ID"
+          echo "   - AZURE_RESOURCE_GROUP: Resource group for VMs"
+          echo "   - AZURE_CLIENT_ID: Service Principal app ID"
+          echo "   - AZURE_CLIENT_SECRET: Service Principal secret"
+          echo "   - AZURE_TENANT_ID: Azure AD tenant ID"
           echo "   - DRY_RUN: Set to 'true' for testing without real provisioning"
+          echo ""
+          echo "🔐 Remember to configure user roles:"
+          echo "   - Assign users to 'invited' role in Azure Portal → Role management"
   
   close_pull_request:
     if: github.event_name == 'pull_request' && github.event.action == 'closed'
