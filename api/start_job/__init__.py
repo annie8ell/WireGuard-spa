@@ -17,7 +17,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')
 
 from shared.auth import validate_user
 from shared.status_store import get_status_store
-from shared.upstream import get_upstream_provider
+from shared.vm_provisioner import get_vm_provisioner
 
 logger = logging.getLogger(__name__)
 
@@ -28,79 +28,41 @@ def _process_job_async(operation_id: str, user_email: str, request_data: dict):
     This runs in a background thread and updates the status store.
     """
     store = get_status_store()
-    provider = get_upstream_provider()
+    provisioner = get_vm_provisioner()
     
     try:
         # Update status to running
-        store.set_running(operation_id, "Contacting upstream provider...")
-        logger.info(f"Starting upstream provisioning for job {operation_id}")
+        store.set_running(operation_id, "Creating Azure VM with WireGuard...")
+        logger.info(f"Starting VM provisioning for job {operation_id}")
         
-        # Call upstream provider to start provisioning
-        success, error_msg, upstream_data = provider.start_provisioning(user_email, request_data)
+        # Generate VM name
+        import time
+        vm_name = f"wg-{int(time.time())}"
+        location = request_data.get('location', 'eastus')
+        
+        # Create VM
+        success, error_msg, vm_data = provisioner.create_vm(vm_name, location)
         
         if not success:
-            logger.error(f"Upstream provisioning failed for job {operation_id}: {error_msg}")
-            store.set_failed(operation_id, error_msg or "Unknown error from upstream")
+            logger.error(f"VM provisioning failed for job {operation_id}: {error_msg}")
+            store.set_failed(operation_id, error_msg or "Unknown error during VM creation")
             return
         
-        # Store upstream reference
-        store.update_job(
-            operation_id,
-            upstreamId=upstream_data.get("upstream_id"),
-            progress="Provisioning VM and WireGuard tunnel..."
-        )
+        # Mark as completed with VM data
+        logger.info(f"VM {vm_name} created successfully for job {operation_id}")
+        store.set_completed(operation_id, vm_data)
         
-        # Poll upstream for completion
-        # In production, this could be optimized with webhooks or separate worker process
-        upstream_id = upstream_data.get("upstream_id")
-        if upstream_id:
-            _poll_upstream_status(operation_id, upstream_id, store, provider)
-        else:
-            # If no upstream ID, mark as completed with the data we have
-            store.set_completed(operation_id, upstream_data)
+        # TODO: Schedule auto-delete after 30 minutes
+        # This could be done via:
+        # 1. Azure Function timer trigger that checks for expired VMs
+        # 2. Azure Automation runbook
+        # 3. Storing expiry time and having a cleanup function
+        logger.info(f"VM {vm_name} scheduled for auto-deletion after 30 minutes (TODO)")
             
     except Exception as e:
         logger.error(f"Error processing job {operation_id}: {str(e)}", exc_info=True)
         store.set_failed(operation_id, f"Internal error: {str(e)}")
 
-
-def _poll_upstream_status(operation_id: str, upstream_id: str, store, provider, max_attempts: int = 60):
-    """
-    Poll upstream provider for status updates.
-    Simple implementation - in production, consider separate worker or webhook.
-    """
-    import time
-    
-    for attempt in range(max_attempts):
-        time.sleep(5)  # Poll every 5 seconds
-        
-        success, error_msg, status_data = provider.get_status(upstream_id)
-        
-        if not success:
-            logger.error(f"Failed to get status for {upstream_id}: {error_msg}")
-            store.set_failed(operation_id, error_msg or "Lost contact with upstream")
-            return
-        
-        upstream_status = status_data.get("status", "").lower()
-        progress = status_data.get("progress", "Processing...")
-        
-        if upstream_status == "completed":
-            result = status_data.get("result", {})
-            store.set_completed(operation_id, result)
-            logger.info(f"Job {operation_id} completed successfully")
-            return
-        elif upstream_status == "failed":
-            error = status_data.get("error", "Upstream job failed")
-            store.set_failed(operation_id, error)
-            logger.error(f"Job {operation_id} failed: {error}")
-            return
-        else:
-            # Still running, update progress
-            store.update_job(operation_id, progress=progress)
-    
-    # Timeout reached
-    store.set_failed(operation_id, "Job timed out after 5 minutes")
-    logger.warning(f"Job {operation_id} timed out")
 
 
 def main(req: func.HttpRequest) -> func.HttpResponse:

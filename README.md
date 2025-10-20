@@ -1,6 +1,6 @@
 # WireGuard On-Demand Launcher
 
-A minimal end-to-end solution for provisioning on-demand WireGuard VPN servers. This project uses a zero-build SPA frontend with Azure Static Web Apps authentication and Python-based built-in Functions that proxy async VM and WireGuard tunnel provisioning via an upstream provider.
+A minimal end-to-end solution for provisioning on-demand WireGuard VPN servers on Azure. This project uses a zero-build SPA frontend with Azure Static Web Apps authentication and Python-based built-in Functions that asynchronously create Ubuntu VMs with WireGuard, then automatically tear them down after 30 minutes.
 
 > **📝 Note**: This project has migrated from Azure Durable Functions to Azure Static Web Apps built-in Functions. See [MIGRATION.md](MIGRATION.md) for details.
 
@@ -9,20 +9,21 @@ A minimal end-to-end solution for provisioning on-demand WireGuard VPN servers. 
 ### Frontend (SPA)
 - **Technology**: Zero-build Single Page Application using Foundation CSS and Alpine.js (via CDN)
 - **Authentication**: Azure Static Web Apps built-in authentication (Google/Microsoft)
-- **Authorization**: Email allowlist with seed user `annie8ell@gmail.com`
+- **Authorization**: Email allowlist with seed user `annie8ell@gmail.com` - only invited users can access
 - **Deployment**: Azure Static Web Apps (single resource)
 
 ### Backend (SWA Built-in Functions)
 - **Technology**: Python 3.11 Azure Static Web Apps Functions
-- **Pattern**: Stateless REST API with 202 Accepted + polling pattern
+- **Pattern**: Async HTTP API with 202 Accepted + status polling pattern
 - **Authentication**: Validates X-MS-CLIENT-PRINCIPAL header against allowlist
 - **Endpoints**:
-  - `POST /api/start_job` - Returns 202 with operationId
+  - `POST /api/start_job` - Returns 202 with operationId, initiates async VM creation
   - `GET /api/job_status?id={operationId}` - Returns job status/progress/result
-- **Integration**: Delegates VM provisioning to upstream provider
+- **VM Provisioning**: Directly creates Azure VMs using Azure SDK with Service Principal credentials
+- **Auto-teardown**: VMs automatically deleted after 30 minutes
 
-### Upstream Provider Integration
-The API functions delegate actual VM and WireGuard provisioning to an upstream provider (configurable via environment variables). This allows flexibility in the provisioning backend while keeping the SWA architecture simple and stateless.
+### Why VM instead of ACI?
+WireGuard requires kernel-level TUN/TAP device support which Azure Container Instances (ACI) doesn't provide. A lightweight VM (Standard_B1ls) is the most straightforward solution for running WireGuard on Azure.
 
 ## Features
 
@@ -38,12 +39,22 @@ The API functions delegate actual VM and WireGuard provisioning to an upstream p
 ## Prerequisites
 
 ### Azure Resources
-1. **Azure Subscription** (if deploying to Azure)
+1. **Azure Subscription** with permissions to create VMs
 2. **Azure Static Web App** (Free tier works) - includes built-in Functions runtime
-3. **Upstream Provider** - API for VM and WireGuard provisioning (or use DRY_RUN mode)
+3. **Service Principal** with VM Contributor role (for creating/deleting VMs)
+4. **Resource Group** where VMs will be created
 
 ### Required GitHub Secrets
 - `AZURE_STATIC_WEB_APPS_API_TOKEN` - Deployment token for Azure Static Web Apps
+
+### Required SWA App Settings
+- `AZURE_SUBSCRIPTION_ID` - Your Azure subscription ID
+- `AZURE_RESOURCE_GROUP` - Resource group where VMs will be created
+- `AZURE_CLIENT_ID` - Service Principal application ID
+- `AZURE_CLIENT_SECRET` - Service Principal secret
+- `AZURE_TENANT_ID` - Azure AD tenant ID
+- `ALLOWED_EMAILS` - Comma-separated list of authorized emails
+- `DRY_RUN` - Set to 'true' for testing without creating real VMs
 
 ## Setup Instructions
 
@@ -68,34 +79,45 @@ The API functions delegate actual VM and WireGuard provisioning to an upstream p
    
    Add this token as `AZURE_STATIC_WEB_APPS_API_TOKEN` in GitHub Secrets.
 
-3. **Configure App Settings**
+3. **Create Service Principal** (for VM provisioning)
+   ```bash
+   az ad sp create-for-rbac \
+     --name wireguard-spa-vm-provisioner \
+     --role "Virtual Machine Contributor" \
+     --scopes /subscriptions/<YOUR_SUBSCRIPTION_ID>/resourceGroups/wireguard-rg
+   ```
+   
+   Note the output: `appId`, `password`, `tenant` - you'll need these for app settings.
+
+4. **Configure App Settings**
    
    In Azure Portal or via CLI:
    ```bash
+   SUBSCRIPTION_ID=$(az account show --query id -o tsv)
+   
    az staticwebapp appsettings set \
      --name wireguard-spa \
      --resource-group wireguard-rg \
      --setting-names \
+       AZURE_SUBSCRIPTION_ID="$SUBSCRIPTION_ID" \
+       AZURE_RESOURCE_GROUP="wireguard-rg" \
+       AZURE_CLIENT_ID="<appId from step 3>" \
+       AZURE_CLIENT_SECRET="<password from step 3>" \
+       AZURE_TENANT_ID="<tenant from step 3>" \
        ALLOWED_EMAILS="user1@example.com,user2@example.com" \
-       UPSTREAM_BASE_URL="https://your-upstream-api.example.com" \
-       UPSTREAM_API_KEY="your-api-key" \
        DRY_RUN="true"
    ```
    
-   **Required settings:**
-   - `ALLOWED_EMAILS` - Comma-separated list of authorized emails
-   - `UPSTREAM_BASE_URL` - Base URL of upstream VM/tunnel provider
-   - `UPSTREAM_API_KEY` - API key for upstream provider
-   - `DRY_RUN` - Set to "true" for testing without real provisioning
+   **Note**: Start with `DRY_RUN=true` to test without creating real VMs.
 
-4. **Configure Authentication**
+5. **Configure Authentication**
    
    In Azure Portal:
    - Navigate to your Static Web App
    - Go to **Authentication**
    - Configure identity providers (Google and/or Microsoft)
 
-5. **Deploy**
+6. **Deploy**
    
    Push to `main` branch or manually trigger the workflow:
    ```bash
@@ -106,23 +128,7 @@ The API functions delegate actual VM and WireGuard provisioning to an upstream p
    git push origin main
    ```
 
-### Upstream Provider Integration
-
-The API functions delegate VM and WireGuard provisioning to an upstream provider. You need to either:
-
-1. **Use DRY_RUN mode** (testing):
-   - Set `DRY_RUN=true` in app settings
-   - Returns sample WireGuard config without calling upstream
-   - Perfect for testing the frontend and API flow
-
-2. **Integrate with your upstream provider**:
-   - Implement or configure the upstream API
-   - Update `api/shared/upstream.py` with actual endpoints
-   - See [MIGRATION.md](MIGRATION.md) for upstream API contract
-   
-   Expected upstream API:
-   - `POST /provision` - Start VM and WireGuard setup
-   - `GET /status/{id}` - Check provisioning status
+The GitHub Actions workflow will deploy both the SPA and API functions to Azure Static Web Apps.
 
 ## Usage
 
