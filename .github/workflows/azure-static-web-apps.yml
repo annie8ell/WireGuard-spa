@@ -11,23 +11,26 @@ on:
       - 'api/**'
       - '.github/workflows/azure-static-web-apps.yml'
   pull_request:
-    types: [closed]
+    # We only listen for labeled and closed actions. The deploy job will
+    # run only for labeled events where the label name is 'run-deploy'.
+    types: [labeled, closed]
     branches:
       - main
   workflow_dispatch:
 
 jobs:
   build_and_deploy:
-    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    # Run on push or manual dispatch, or on a pull_request labeled event with label 'run-deploy'
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.action == 'labeled' && github.event.label.name == 'run-deploy')
     runs-on: ubuntu-latest
     name: Build and Deploy to Azure Static Web Apps
-    
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v3
         with:
           submodules: true
-      
+
       - name: Deploy to Azure Static Web Apps
         id: deploy
         uses: Azure/static-web-apps-deploy@v1
@@ -41,15 +44,15 @@ jobs:
           output_location: ''
           # API configuration - Python 3.11 Functions (auto-detected)
           api_location: 'api'
-      
+
       - name: Deployment summary
         if: success()
         run: |
-          echo "\u2705 Azure Static Web Apps deployment successful"
-          echo "\ud83d\udce6 App location: / (SPA at repo root, no build)"
-          echo "\ud83d\udd0c API location: api (Python 3.11)"
+          echo "✅ Azure Static Web Apps deployment successful"
+          echo "📦 App location: / (SPA at repo root, no build)"
+          echo "🔌 API location: api (Python 3.11)"
           echo ""
-          echo "\u2699\ufe0f  Remember to configure these SWA app settings:"
+          echo "⚙️  Remember to configure these SWA app settings:"
           echo "   - AZURE_SUBSCRIPTION_ID: Azure subscription ID"
           echo "   - AZURE_RESOURCE_GROUP: Resource group for VMs"
           echo "   - AZURE_CLIENT_ID: Service Principal app ID"
@@ -57,14 +60,14 @@ jobs:
           echo "   - AZURE_TENANT_ID: Azure AD tenant ID"
           echo "   - DRY_RUN: Set to 'true' for testing without real provisioning"
           echo ""
-          echo "\ud83d\udd10 Remember to configure user roles:"
+          echo "🔐 Remember to configure user roles:"
           echo "   - Assign users to 'invited' role in Azure Portal -> Role management"
-  
+
   close_pull_request:
     if: github.event_name == 'pull_request' && github.event.action == 'closed'
     runs-on: ubuntu-latest
     name: Close Pull Request
-    
+
     steps:
       - name: Close Pull Request
         uses: Azure/static-web-apps-deploy@v1
