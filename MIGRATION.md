@@ -46,17 +46,19 @@ This document describes the migration from a separate Azure Function App using D
 │  │  Built-in Functions (api/)         │  │
 │  │  - POST /api/start_job             │  │
 │  │  - GET /api/job_status             │  │
-│  │  - Stateless proxy pattern         │  │
+│  │  - Uses Azure SDK to create VMs    │  │
 │  │  - Single deployment               │  │
 │  └────────────────────────────────────┘  │
 └──────────────┬───────────────────────────┘
-               │
+               │ Uses Service Principal
+               │ (Azure SDK)
                ▼
 ┌──────────────────────────────────────────┐
-│  Upstream Provider API                   │
-│  - VM provisioning                       │
-│  - WireGuard configuration               │
-│  - Status polling                        │
+│  Azure VM (WireGuard)                    │
+│  - Ubuntu 18.04 LTS                      │
+│  - Standard_B1ls                         │
+│  - WireGuard configured                  │
+│  - Auto-deleted after 30 minutes         │
 └──────────────────────────────────────────┘
 ```
 
@@ -72,6 +74,8 @@ This document describes the migration from a separate Azure Function App using D
 
 **After (SWA Functions):**
 - Stateless functions with 202 Accepted pattern
+- Direct Azure VM creation using Azure SDK
+- Service Principal authentication (no Managed Identity support in SWA Functions)
 - In-memory status store (upgradable to Redis/Table Storage)
 - Client-side polling for status updates
 - Simpler implementation, easier to understand
@@ -172,7 +176,7 @@ Created new API structure under `api/`:
 - ✅ `api/start_job/` - Initiates async job, returns 202
 - ✅ `api/job_status/` - Returns job status
 - ✅ `api/shared/status_store.py` - In-memory job tracking
-- ✅ `api/shared/upstream.py` - Upstream provider integration
+- ✅ `api/shared/vm_provisioner.py` - Direct Azure VM provisioning using Azure SDK
 - ✅ `api/shared/auth.py` - Authentication utilities (from old backend)
 
 ### 3. Configuration Updates
@@ -191,13 +195,17 @@ Created new API structure under `api/`:
 
 ### Removed (Durable Functions specific):
 - `AzureWebJobsStorage` - No longer needed (was for Durable Functions state)
-- `AZURE_SUBSCRIPTION_ID` - Move to upstream provider if needed
-- `AZURE_RESOURCE_GROUP` - Move to upstream provider if needed
+- `FUNCTIONS_WORKER_RUNTIME` - No longer needed (replaced by SWA Functions)
+
+### Changed:
+- `AZURE_SUBSCRIPTION_ID` - Still needed, now in SWA app settings (was in Function App)
+- `AZURE_RESOURCE_GROUP` - Still needed, now in SWA app settings (was in Function App)
 
 ### New/Required:
+- `AZURE_CLIENT_ID` - Service Principal application ID (for Azure SDK authentication)
+- `AZURE_CLIENT_SECRET` - Service Principal secret (SWA Functions don't support Managed Identity)
+- `AZURE_TENANT_ID` - Azure AD tenant ID
 - `ALLOWED_EMAILS` - Comma-separated list of authorized emails (carried over)
-- `UPSTREAM_BASE_URL` - Base URL of upstream VM/tunnel provider API
-- `UPSTREAM_API_KEY` - API key for upstream provider authentication
 - `DRY_RUN` - Set to "true" for testing without real provisioning (carried over)
 
 ### Configuration in Azure Portal:
@@ -206,6 +214,8 @@ Created new API structure under `api/`:
 2. Go to **Configuration** → **Application settings**
 3. Add/update the environment variables listed above
 4. Save and restart the app
+
+**Important**: SWA Functions do NOT support Managed Identity. Azure credentials must be provided via Service Principal stored in app settings.
 
 ## Frontend Changes Required
 
@@ -273,14 +283,30 @@ if (status.status === 'completed') {
    - Add secret: `AZURE_STATIC_WEB_APPS_API_TOKEN` with the token value
 
 4. **Configure App Settings**:
+   First, create a Service Principal:
    ```bash
+   az ad sp create-for-rbac \
+     --name wireguard-spa-vm-provisioner \
+     --role "Virtual Machine Contributor" \
+     --scopes /subscriptions/<YOUR_SUBSCRIPTION_ID>/resourceGroups/wireguard-rg
+   ```
+   
+   Note the output values (appId, password, tenant).
+   
+   Then configure app settings:
+   ```bash
+   SUBSCRIPTION_ID=$(az account show --query id -o tsv)
+   
    az staticwebapp appsettings set \
      --name wireguard-spa \
      --resource-group wireguard-rg \
      --setting-names \
+       AZURE_SUBSCRIPTION_ID="$SUBSCRIPTION_ID" \
+       AZURE_RESOURCE_GROUP="wireguard-rg" \
+       AZURE_CLIENT_ID="<appId from Service Principal>" \
+       AZURE_CLIENT_SECRET="<password from Service Principal>" \
+       AZURE_TENANT_ID="<tenant from Service Principal>" \
        ALLOWED_EMAILS="user1@example.com,user2@example.com" \
-       UPSTREAM_BASE_URL="https://your-upstream-api.example.com" \
-       UPSTREAM_API_KEY="your-api-key" \
        DRY_RUN="true"
    ```
 
@@ -293,65 +319,32 @@ if (status.status === 'completed') {
 1. **With DRY_RUN=true** (recommended first):
    - No actual VM provisioning
    - Returns sample WireGuard config
-   - Tests the flow end-to-end
+   - Tests the flow end-to-end without Azure costs
 
-2. **With real upstream**:
-   - Set `DRY_RUN=false`
-   - Configure `UPSTREAM_BASE_URL` and `UPSTREAM_API_KEY`
-   - Implement actual upstream integration in `api/shared/upstream.py`
+2. **With DRY_RUN=false** (production):
+   - Set `DRY_RUN=false` in app settings
+   - Actually creates Azure VMs using configured Service Principal
+   - VMs automatically deleted after 30 minutes
 
-## Upstream Provider Integration
+## VM Provisioning Details
 
-The new architecture delegates VM provisioning to an upstream provider. You need to:
+The SWA Functions directly create Azure VMs using the Azure SDK:
 
-1. **Implement or integrate with an upstream API** that provides:
-   - `POST /provision` - Start VM + WireGuard setup
-   - `GET /status/{id}` - Check provisioning status
+1. **Authentication**: Uses Service Principal credentials (stored in SWA app settings)
+   - SWA Functions do NOT support Managed Identity
+   - Service Principal must have "Virtual Machine Contributor" role
 
-2. **Update `api/shared/upstream.py`**:
-   - Replace TODO comments with actual endpoint URLs
-   - Adjust request/response formats to match your provider
-   - Add error handling specific to your provider
+2. **VM Creation** (`api/shared/vm_provisioner.py`):
+   - Creates Network Security Group (allows WireGuard port 51820, SSH port 22)
+   - Creates Virtual Network and Subnet
+   - Creates Public IP (static)
+   - Creates Network Interface
+   - Creates VM (Standard_B1ls, Ubuntu 18.04 LTS)
+   - Installs WireGuard via cloud-init
 
-3. **Example upstream responses**:
-
-   Start provisioning:
-   ```json
-   {
-     "upstream_id": "vm-12345",
-     "status": "provisioning",
-     "message": "VM creation initiated"
-   }
-   ```
-
-   Get status (in progress):
-   ```json
-   {
-     "status": "running",
-     "progress": "Installing WireGuard..."
-   }
-   ```
-
-   Get status (completed):
-   ```json
-   {
-     "status": "completed",
-     "progress": "VM ready",
-     "result": {
-       "vmName": "wg-vm-12345",
-       "publicIp": "203.0.113.42",
-       "confText": "[Interface]\n..."
-     }
-   }
-   ```
-
-   Get status (failed):
-   ```json
-   {
-     "status": "failed",
-     "error": "VM creation failed: quota exceeded"
-   }
-   ```
+3. **Auto-Teardown**:
+   - VMs should be automatically deleted after 30 minutes
+   - TODO: Implement cleanup mechanism (options: scheduled function, expiry tags, separate worker)
 
 ## Benefits of Migration
 
