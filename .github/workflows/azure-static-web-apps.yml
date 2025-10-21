@@ -37,9 +37,9 @@ jobs:
           repo_token: ${{ secrets.GITHUB_TOKEN }}
           action: 'upload'
           # App (SPA) configuration - no build step
-          app_location: 'frontend/public'
+          app_location: '/frontend/public'
           skip_app_build: true
-          output_location: ''
+          output_location: '.'
           # API configuration - Python 3.11 Functions (auto-detected)
           api_location: 'api'
 
