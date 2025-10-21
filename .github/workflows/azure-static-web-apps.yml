@@ -5,9 +5,7 @@ on:
     branches:
       - main
     paths:
-      - 'index.html'
-      - 'routes.json'
-      - 'staticwebapp.config.json'
+      - 'frontend/public/**'
       - 'api/**'
       - '.github/workflows/azure-static-web-apps.yml'
   pull_request:
@@ -39,9 +37,9 @@ jobs:
           repo_token: ${{ secrets.GITHUB_TOKEN }}
           action: 'upload'
           # App (SPA) configuration - no build step
-          app_location: '/'
+          app_location: '/frontend/public'
           skip_app_build: true
-          output_location: ''
+          output_location: '.'
           # API configuration - Python 3.11 Functions (auto-detected)
           api_location: 'api'
 
@@ -49,7 +47,7 @@ jobs:
         if: success()
         run: |
           echo "✅ Azure Static Web Apps deployment successful"
-          echo "📦 App location: / (SPA at repo root, no build)"
+          echo "📦 App location: frontend/public (SPA with organized structure, no build)"
           echo "🔌 API location: api (Python 3.11)"
           echo ""
           echo "⚙️  Remember to configure these SWA app settings:"
