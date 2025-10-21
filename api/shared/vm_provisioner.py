@@ -4,6 +4,7 @@ Adapted for Azure Static Web Apps Functions (no Managed Identity support).
 """
 import logging
 import os
+import time
 from azure.identity import ClientSecretCredential
 from azure.mgmt.compute import ComputeManagementClient
 from azure.mgmt.network import NetworkManagementClient
@@ -15,6 +16,39 @@ logger = logging.getLogger(__name__)
 def is_dry_run() -> bool:
     """Check if dry run mode is enabled."""
     return os.environ.get('DRY_RUN', 'false').lower() == 'true'
+
+
+# Dry run state storage (in-memory for local development)
+_dry_run_operations = {}
+
+
+def get_dry_run_status(operation_id: str) -> Dict:
+    """Get the status of a dry run operation with realistic timing."""
+    current_time = time.time()
+    
+    if operation_id not in _dry_run_operations:
+        # Initialize new operation
+        _dry_run_operations[operation_id] = {
+            'start_time': current_time,
+            'status': 'Running',
+            'public_ip': '203.0.113.42'
+        }
+    
+    operation = _dry_run_operations[operation_id]
+    elapsed = current_time - operation['start_time']
+    
+    # Simulate realistic provisioning timeline:
+    # 0-3s: Creating
+    # 3-8s: Running  
+    # 8s+: Succeeded
+    if elapsed < 3:
+        operation['status'] = 'Creating'
+    elif elapsed < 8:
+        operation['status'] = 'Running'
+    else:
+        operation['status'] = 'Succeeded'
+    
+    return operation
 
 
 def get_azure_credential() -> Tuple[bool, Optional[str], Optional[ClientSecretCredential]]:
@@ -67,14 +101,16 @@ class VMProvisioner:
         """
         if is_dry_run():
             logger.info(f"DRY RUN: Would get or create VM")
-            # In dry run, return immediately as "completed"
+            # In dry run, initialize operation and return as "accepted"
+            operation_id = f"dry-run-{int(time.time())}"
+            get_dry_run_status(operation_id)  # Initialize the operation
             return True, None, {
-                'vmName': 'wg-vm',
-                'operationId': 'dry-run-wg-vm',
-                'status': 'Succeeded',
-                'publicIp': '203.0.113.42',
+                'vmName': f'wg-{int(time.time())}',
+                'operationId': operation_id,
+                'status': 'Creating',  # Start as creating
+                'publicIp': None,  # No IP yet
                 'location': location,
-                'confText': self._get_sample_config(),
+                'confText': None,  # No config yet
                 'isExisting': False
             }
         
@@ -136,14 +172,16 @@ class VMProvisioner:
         
         if is_dry_run():
             logger.info(f"DRY RUN: Would create VM {vm_name} in {location}")
-            # In dry run, return immediately as "completed"
+            # In dry run, initialize operation and return as "creating"
+            operation_id = f"dry-run-{vm_name}"
+            get_dry_run_status(operation_id)  # Initialize the operation
             return True, None, {
                 'vmName': vm_name,
-                'operationId': f"dry-run-{vm_name}",
-                'status': 'Succeeded',
-                'publicIp': '203.0.113.42',
+                'operationId': operation_id,
+                'status': 'Creating',  # Start as creating
+                'publicIp': None,  # No IP yet
                 'location': location,
-                'confText': self._get_sample_config(),
+                'confText': None,  # No config yet
                 'isExisting': False
             }
         
@@ -334,13 +372,22 @@ runcmd:
         """
         if is_dry_run():
             logger.info(f"DRY RUN: Getting status for VM {vm_name}")
-            # In dry run, always return as completed
-            return True, None, {
+            # Get realistic status based on elapsed time
+            operation = get_dry_run_status(vm_name)
+            status = operation['status']
+            
+            response = {
                 'vmName': vm_name,
-                'status': 'Succeeded',
-                'publicIp': '203.0.113.42',
-                'confText': self._get_sample_config()
+                'status': status,
             }
+            
+            if status == 'Succeeded':
+                response.update({
+                    'publicIp': operation['public_ip'],
+                    'confText': self._get_sample_config(operation['public_ip'])
+                })
+            
+            return True, None, response
         
         try:
             logger.info(f"Checking status for VM {vm_name}")

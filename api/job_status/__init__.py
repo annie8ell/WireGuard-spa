@@ -59,24 +59,27 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
         # Build response from Azure data
         response_data = {
             "operationId": operation_id,
-            "status": status_data.get('status', 'Unknown')
+            "runtimeStatus": status_data.get('status', 'Unknown')
         }
         
         # Add progress if available
         if 'progress' in status_data:
             response_data['progress'] = status_data['progress']
         
-        # Add result if completed
+        # Add output if completed
         if status_data.get('status') == 'Succeeded':
-            response_data['result'] = {
+            response_data['output'] = {
                 'vmName': status_data.get('vmName'),
                 'publicIp': status_data.get('publicIp'),
                 'confText': status_data.get('confText')
             }
+            # Change status to 'Completed' to match frontend expectations
+            response_data['runtimeStatus'] = 'Completed'
         
         # Add error if failed
         if status_data.get('status') == 'Failed' and 'error' in status_data:
             response_data['error'] = status_data['error']
+            response_data['runtimeStatus'] = 'Failed'
         
         # Return status
         return func.HttpResponse(
