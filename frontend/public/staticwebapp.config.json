@@ -4,10 +4,6 @@
   },
   "routes": [
     {
-      "route": "/unauthorized.html",
-      "allowedRoles": ["authenticated"]
-    },
-    {
       "route": "/unauthorized",
       "rewrite": "/unauthorized.html",
       "allowedRoles": ["authenticated"]
