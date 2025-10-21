@@ -84,6 +84,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - ACI mode available but not recommended for production WireGuard workloads
 - All resources created with parameterized naming for flexibility
 - Cost-optimized with Consumption plan and ephemeral VMs
+- Conducted review of entire code base.
 
 ## [Unreleased]
 
