@@ -131,8 +131,7 @@
                 configText: null,
                 error: null,
                 pollInterval: null,
-                allowlist: ['annie8ell@gmail.com'], // Seed allowlist
-
+                
                 async init() {
                     await this.checkAuth();
                 },
@@ -143,14 +142,7 @@
                         const data = await response.json();
                         
                         if (data.clientPrincipal) {
-                            const email = data.clientPrincipal.userDetails;
-                            // Check allowlist
-                            if (this.allowlist.includes(email)) {
-                                this.user = data.clientPrincipal;
-                            } else {
-                                console.warn('User not in allowlist:', email);
-                                this.user = null;
-                            }
+                            const email = data.clientPrincipal.userDetails;                            
                         }
                     } catch (err) {
                         console.error('Auth check failed:', err);
@@ -199,7 +191,7 @@
                     
                     this.pollInterval = setInterval(() => {
                         this.checkStatus();
-                    }, 3000); // Poll every 3 seconds
+                    }, 30000); // Poll every 30 seconds
                     
                     // Initial check
                     this.checkStatus();
