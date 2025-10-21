@@ -47,7 +47,7 @@ jobs:
         if: success()
         run: |
           echo "✅ Azure Static Web Apps deployment successful"
-          echo "📦 App location: / (SPA at repo root, no build)"
+          echo "📦 App location: frontend/public (SPA with organized structure, no build)"
           echo "🔌 API location: api (Python 3.11)"
           echo ""
           echo "⚙️  Remember to configure these SWA app settings:"
