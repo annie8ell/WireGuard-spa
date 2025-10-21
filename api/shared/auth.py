@@ -5,9 +5,15 @@ Uses SWA's built-in role-based authentication.
 import base64
 import json
 import logging
+import os
 from typing import Optional, Tuple
 
 logger = logging.getLogger(__name__)
+
+
+def is_dry_run() -> bool:
+    """Check if dry run mode is enabled."""
+    return os.environ.get('DRY_RUN', 'false').lower() == 'true'
 
 
 def validate_user(req) -> Tuple[bool, Optional[str], Optional[str]]:
@@ -15,12 +21,19 @@ def validate_user(req) -> Tuple[bool, Optional[str], Optional[str]]:
     Validates the user by decoding the X-MS-CLIENT-PRINCIPAL header
     and checking for the 'invited' role as defense in depth.
     
+    In dry run mode, authentication is bypassed for local development.
+    
     SWA authentication should already enforce invited users only,
     but this provides an additional security layer.
     
     Returns:
         tuple: (is_valid, email, error_message)
     """
+    # In dry run mode, skip authentication for local development
+    if is_dry_run():
+        logger.info('DRY RUN: Skipping authentication for local development')
+        return True, 'dry-run-user@example.com', None
+    
     try:
         # Get the X-MS-CLIENT-PRINCIPAL header
         principal_header = req.headers.get('X-MS-CLIENT-PRINCIPAL')
