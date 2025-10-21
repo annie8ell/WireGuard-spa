@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Access Denied - WireGuard On-Demand Launcher</title>
+    <!-- Foundation CSS via CDN -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/foundation-sites@6.8.1/dist/css/foundation.min.css">
+    <style>
+        body {
+            background-color: #f4f4f4;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+            margin: 0;
+            padding: 1rem;
+        }
+        .container {
+            max-width: 600px;
+            background: white;
+            border-radius: 8px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+            padding: 2rem;
+            text-align: center;
+        }
+        .icon {
+            font-size: 4rem;
+            color: #cc4b37;
+            margin-bottom: 1rem;
+        }
+        h1 {
+            color: #333;
+            margin-bottom: 1rem;
+        }
+        p {
+            color: #666;
+            line-height: 1.6;
+            margin-bottom: 1.5rem;
+        }
+        .button-group {
+            display: flex;
+            flex-direction: column;
+            gap: 1rem;
+            margin-top: 2rem;
+        }
+        .button {
+            display: inline-block;
+            padding: 0.75rem 1.5rem;
+            border-radius: 4px;
+            text-decoration: none;
+            font-weight: 600;
+            transition: background-color 0.3s;
+        }
+        .button-primary {
+            background-color: #2199e8;
+            color: white;
+        }
+        .button-primary:hover {
+            background-color: #1585cf;
+        }
+        .button-secondary {
+            background-color: #767676;
+            color: white;
+        }
+        .button-secondary:hover {
+            background-color: #5e5e5e;
+        }
+        .button-warning {
+            background-color: #ffae00;
+            color: #333;
+        }
+        .button-warning:hover {
+            background-color: #cc8b00;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="icon">🚫</div>
+        <h1>Access Denied</h1>
+        <p>
+            You are signed in, but you do not have permission to access this application.
+        </p>
+        <p>
+            This application is invite-only. Only users with the <strong>'invited'</strong> role can access it.
+        </p>
+        <p>
+            If you believe you should have access, please contact the administrator to request an invitation.
+        </p>
+        <div class="button-group">
+            <a href="mailto:your-email@example.com?subject=WireGuard%20Access%20Request" class="button button-primary">
+                Contact Administrator
+            </a>
+            <a href="https://github.com/annie8ell/WireGuard-spa#readme" class="button button-warning" target="_blank">
+                View Documentation
+            </a>
+            <a href="/.auth/logout" class="button button-secondary">
+                Sign Out
+            </a>
+        </div>
+    </div>
+</body>
+</html>
