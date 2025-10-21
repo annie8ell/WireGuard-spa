@@ -6,116 +6,388 @@
     <title>WireGuard On-Demand Launcher</title>
     <!-- Foundation CSS via CDN -->
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/foundation-sites@6.8.1/dist/css/foundation.min.css">
-    <!-- Alpine.js via CDN -->
-    <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.13.3/dist/cdn.min.js"></script>
+    <!-- Alpine.js latest 3.x.x build via CDN -->
+    <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
     <style>
+        * {
+            box-sizing: border-box;
+        }
+        
         body {
-            background-color: #f4f4f4;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            padding: 2rem 1rem;
         }
+        
         .container {
-            max-width: 800px;
-            margin: 2rem auto;
-            padding: 2rem;
+            max-width: 900px;
+            margin: 0 auto;
+            padding: 3rem 2rem;
             background: white;
-            border-radius: 8px;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            border-radius: 12px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
         }
-        .status-message {
-            padding: 1rem;
-            margin: 1rem 0;
-            border-radius: 4px;
+        
+        h1 {
+            color: #333;
+            margin-bottom: 0.5rem;
+            font-size: 2.5rem;
+            text-align: center;
         }
-        .status-loading {
-            background-color: #e7f3ff;
-            border: 1px solid #2199e8;
+        
+        .subtitle {
+            text-align: center;
+            color: #666;
+            margin-bottom: 2rem;
+            font-size: 1.1rem;
         }
-        .status-success {
-            background-color: #e1faea;
-            border: 1px solid #3adb76;
+        
+        h3 {
+            color: #333;
+            font-size: 1.4rem;
+            margin-top: 1.5rem;
+            margin-bottom: 1rem;
+            border-bottom: 2px solid #e0e0e0;
+            padding-bottom: 0.5rem;
         }
-        .status-error {
-            background-color: #ffe6e6;
-            border: 1px solid #cc4b37;
+        
+        h4 {
+            color: #333;
+            font-size: 1.1rem;
+            margin-bottom: 0.5rem;
         }
-        .user-info {
-            background-color: #f0f0f0;
-            padding: 1rem;
-            border-radius: 4px;
+        
+        p {
+            color: #555;
+            line-height: 1.6;
             margin-bottom: 1rem;
         }
+        
+        .status-message {
+            padding: 1.5rem;
+            margin: 1.5rem 0;
+            border-radius: 8px;
+            border-left: 4px solid;
+            animation: slideIn 0.3s ease-out;
+        }
+        
+        @keyframes slideIn {
+            from {
+                opacity: 0;
+                transform: translateY(-10px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+        
+        .status-loading {
+            background-color: #e3f2fd;
+            border-color: #2196f3;
+        }
+        
+        .status-success {
+            background-color: #e8f5e9;
+            border-color: #4caf50;
+        }
+        
+        .status-error {
+            background-color: #ffebee;
+            border-color: #f44336;
+        }
+        
+        .user-info {
+            background-color: #f5f5f5;
+            padding: 1.5rem;
+            border-radius: 8px;
+            margin-bottom: 2rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 1rem;
+        }
+        
+        .user-info strong {
+            color: #333;
+        }
+        
+        .user-email {
+            color: #667eea;
+            font-weight: 600;
+        }
+        
+        .button {
+            padding: 0.75rem 1.5rem;
+            border: none;
+            border-radius: 6px;
+            font-size: 1rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            text-decoration: none;
+            display: inline-block;
+        }
+        
+        .button.primary {
+            background-color: #667eea;
+            color: white;
+        }
+        
+        .button.primary:hover {
+            background-color: #5568d3;
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+        }
+        
+        .button.secondary {
+            background-color: #e0e0e0;
+            color: #333;
+        }
+        
+        .button.secondary:hover {
+            background-color: #d0d0d0;
+        }
+        
+        .button.success {
+            background-color: #4caf50;
+            color: white;
+        }
+        
+        .button.success:hover {
+            background-color: #45a049;
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(76, 175, 80, 0.4);
+        }
+        
+        .button.alert {
+            background-color: #f44336;
+            color: white;
+        }
+        
+        .button.alert:hover {
+            background-color: #da190b;
+        }
+        
+        .button:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+            transform: none !important;
+        }
+        
+        .button.large {
+            padding: 1rem 2rem;
+            font-size: 1.1rem;
+            width: 100%;
+        }
+        
+        .button.small {
+            padding: 0.5rem 1rem;
+            font-size: 0.9rem;
+        }
+        
+        .button-group {
+            display: flex;
+            gap: 1rem;
+            margin-top: 1.5rem;
+            flex-wrap: wrap;
+        }
+        
+        .button-group .button {
+            flex: 1;
+            min-width: 200px;
+        }
+        
         pre {
             background-color: #f5f5f5;
             padding: 1rem;
-            border-radius: 4px;
+            border-radius: 6px;
             overflow-x: auto;
+            border: 1px solid #e0e0e0;
+            font-size: 0.9rem;
+            line-height: 1.4;
+        }
+        
+        details {
+            background-color: #fafafa;
+            padding: 1rem;
+            border-radius: 6px;
+            border: 1px solid #e0e0e0;
+        }
+        
+        summary {
+            cursor: pointer;
+            font-weight: 600;
+            color: #667eea;
+            user-select: none;
+        }
+        
+        summary:hover {
+            color: #5568d3;
+        }
+        
+        .loading-spinner {
+            display: inline-block;
+            width: 1rem;
+            height: 1rem;
+            border: 2px solid #f3f3f3;
+            border-top: 2px solid #667eea;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin-right: 0.5rem;
+        }
+        
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        
+        .status-badge {
+            display: inline-block;
+            padding: 0.25rem 0.75rem;
+            border-radius: 20px;
+            font-size: 0.9rem;
+            font-weight: 600;
+        }
+        
+        .status-badge.running {
+            background-color: #e3f2fd;
+            color: #1976d2;
+        }
+        
+        .status-badge.completed {
+            background-color: #e8f5e9;
+            color: #388e3c;
+        }
+        
+        .status-badge.failed {
+            background-color: #ffebee;
+            color: #d32f2f;
+        }
+        
+        .info-box {
+            background-color: #f0f4ff;
+            border-left: 4px solid #667eea;
+            padding: 1rem;
+            border-radius: 4px;
+            margin: 1rem 0;
+        }
+        
+        .info-box small {
+            color: #555;
+        }
+        
+        .clearfix::after {
+            content: "";
+            display: table;
+            clear: both;
+        }
+        
+        @media (max-width: 768px) {
+            .container {
+                padding: 1.5rem 1rem;
+            }
+            
+            h1 {
+                font-size: 1.8rem;
+            }
+            
+            .user-info {
+                flex-direction: column;
+                align-items: flex-start;
+            }
+            
+            .button.large {
+                width: 100%;
+            }
         }
     </style>
 </head>
 <body>
-    <div class="container" x-data="vpnLauncher()">
-        <h1>WireGuard On-Demand Launcher</h1>
+    <div class="container" x-data="vpnLauncher()" x-init="init()">
+        <h1>🔐 WireGuard On-Demand Launcher </h1>
+        <p class="subtitle">Provision secure VPN servers on-demand with automatic cleanup</p>
         
         <!-- Loading State -->
-        <div x-show="loading && !user" class="status-message status-loading">
-            <p>Loading user information...</p>
+        <div x-show="loading" class="status-message status-loading">
+            <p><span class="loading-spinner"></span>Loading...</p>
         </div>
 
-        <!-- Unauthorized Access -->
-        <div x-show="!loading && !user" class="status-message status-error">
-            <h3>Access Denied</h3>
-            <p>You are not authorized to use this service. Please sign in with an authorized account.</p>
-            <a href="/.auth/login/google" class="button primary">Sign in with Google</a>
-            <a href="/.auth/login/aad" class="button primary">Sign in with Microsoft</a>
+        <!-- Not Authenticated -->
+        <div x-show="!loading && !user">
+            <div class="status-message status-error">
+                <h3>🔒 Authentication Required</h3>
+                <p>You need to sign in to access this application.</p>
+                <div class="button-group">
+                    <a href="/.auth/login/google" class="button primary">Sign in with Google</a>
+                    <a href="/.auth/login/aad" class="button primary">Sign in with Microsoft</a>
+                </div>
+            </div>
         </div>
 
-        <!-- Authorized User Interface -->
-        <div x-show="user">
+        <!-- Authenticated User Interface -->
+        <div x-show="!loading && user">
+            <!-- User Info Header -->
             <div class="user-info">
-                <strong>Signed in as:</strong> <span x-text="user?.userDetails || 'Unknown'"></span>
-                <a href="/.auth/logout" class="button small secondary float-right">Sign Out</a>
-                <div class="clearfix"></div>
+                <div>
+                    <strong>Signed in as:</strong> 
+                    <span class="user-email" x-text="userEmail"></span>
+                </div>
+                <button @click="logout()" class="button small secondary">Sign Out</button>
             </div>
 
-            <!-- Request VPN Section -->
-            <div x-show="!orchestrationId && !error">
-                <h3>Request a WireGuard VPN</h3>
-                <p>Click the button below to provision your on-demand WireGuard VPN. The VM will automatically tear down after 30 minutes.</p>
-                <button 
-                    @click="requestVPN()" 
-                    :disabled="requesting"
-                    class="button large primary"
-                    x-text="requesting ? 'Requesting...' : 'Request VPN'">
-                </button>
+        <!-- Request VPN Section -->
+    <div x-show="showRequestSection">
+            <h3>📡 Request a WireGuard VPN</h3>
+            <p>Click the button below to provision your on-demand WireGuard VPN. The VM will automatically tear down after 30 minutes.</p>
+            <div class="info-box">
+                <small>💡 <strong>How it works:</strong> We'll provision a secure VPN server in Azure that's tailored to your needs. You'll receive a WireGuard configuration file that you can import into any WireGuard client.</small>
             </div>
+            <button 
+                @click="requestVPN()" 
+                :disabled="requesting"
+                class="button large primary"
+                x-text="requestButtonText">
+            </button>
+        </div>
 
-            <!-- Status Polling -->
-            <div x-show="orchestrationId && status !== 'Completed'" class="status-message status-loading">
-                <h4>Provisioning VPN...</h4>
-                <p>Status: <strong x-text="status"></strong></p>
-                <p x-show="statusMessage" x-text="statusMessage"></p>
-                <p><small>This may take a few minutes. Please wait...</small></p>
-            </div>
+        <!-- Status Polling -->
+    <div x-show="showProvisioning" class="status-message status-loading">
+            <h4>⏳ Provisioning VPN...</h4>
+            <p>
+                Status: 
+                <span class="status-badge running" x-text="status"></span>
+            </p>
+            <p x-show="hasStatusMessage" x-text="statusMessage"></p>
+            <p><small>This may take a few minutes. We're setting up your secure connection...</small></p>
+        </div>
 
-            <!-- Success - Config Ready -->
-            <div x-show="status === 'Completed' && configText" class="status-message status-success">
-                <h4>✓ VPN Ready!</h4>
-                <p>Your WireGuard configuration is ready. Download it and import into your WireGuard client.</p>
+        <!-- Success - Config Ready -->
+    <div x-show="showSuccess" class="status-message status-success">
+            <h4>✅ VPN Ready!</h4>
+            <p>Your WireGuard configuration is ready. Download it and import into your WireGuard client.</p>
+            <div class="button-group">
                 <button @click="downloadConfig()" class="button success large">
-                    Download wireguard.conf
+                    📥 Download wireguard.conf
                 </button>
-                <details style="margin-top: 1rem;">
-                    <summary>Show Configuration</summary>
-                    <pre x-text="configText"></pre>
-                </details>
-                <p style="margin-top: 1rem;"><small><strong>Note:</strong> This VM will automatically shut down in 30 minutes.</small></p>
             </div>
+            <details style="margin-top: 1rem;">
+                <summary>📋 Show Configuration</summary>
+                <pre x-text="configText" style="margin-top: 1rem;"></pre>
+            </details>
+            <div class="info-box">
+                <small>⏱️ <strong>Auto-shutdown:</strong> This VM will automatically shut down in 30 minutes.</small>
+            </div>
+        </div>
 
-            <!-- Error State -->
-            <div x-show="error" class="status-message status-error">
-                <h4>Error</h4>
-                <p x-text="error"></p>
-                <button @click="reset()" class="button alert">Try Again</button>
-            </div>
+        <!-- Error State -->
+        <div x-show="hasError" class="status-message status-error">
+            <h4>❌ Error</h4>
+            <p x-text="error"></p>
+            <button @click="reset()" class="button alert">🔄 Try Again</button>
+        </div>
         </div>
     </div>
 
@@ -133,23 +405,56 @@
                 pollInterval: null,
                 
                 async init() {
-                    await this.checkAuth();
+                    await this.loadUser();
                 },
 
-                async checkAuth() {
+                async loadUser() {
                     try {
                         const response = await fetch('/.auth/me');
                         const data = await response.json();
                         
                         if (data.clientPrincipal) {
-                            const email = data.clientPrincipal.userDetails;                            
+                            this.user = data.clientPrincipal;
                         }
                     } catch (err) {
-                        console.error('Auth check failed:', err);
+                        console.error('Failed to load user info:', err);
                         this.user = null;
                     } finally {
                         this.loading = false;
                     }
+                },
+
+                // Computed / helper properties (no expressions in HTML)
+                get userEmail() {
+                    return this.user && this.user.userDetails ? this.user.userDetails : 'Loading...';
+                },
+
+                get showRequestSection() {
+                    return !this.orchestrationId && !this.error;
+                },
+
+                get requestButtonText() {
+                    return this.requesting ? '⏳ Requesting...' : '🚀 Request VPN';
+                },
+
+                get showProvisioning() {
+                    return !!this.orchestrationId && this.status !== 'Completed' && this.status !== 'Failed';
+                },
+
+                get hasStatusMessage() {
+                    return !!this.statusMessage;
+                },
+
+                get showSuccess() {
+                    return this.status === 'Completed' && !!this.configText;
+                },
+
+                get hasError() {
+                    return !!this.error;
+                },
+
+                logout() {
+                    window.location.href = '/.auth/logout';
                 },
 
                 async requestVPN() {
@@ -157,12 +462,12 @@
                     this.error = null;
                     
                     try {
-                        const response = await fetch('/api/http_start', {
+                        const response = await fetch('/api/start_job', {
                             method: 'POST',
                             headers: {
                                 'Content-Type': 'application/json'
                             },
-                            body: JSON.stringify({ action: 'provision' })
+                            body: JSON.stringify({ location: 'eastus' })
                         });
 
                         if (!response.ok) {
@@ -171,7 +476,7 @@
                         }
 
                         const data = await response.json();
-                        this.orchestrationId = data.id;
+                        this.orchestrationId = data.operationId;
                         this.status = 'Running';
                         
                         // Start polling for status
@@ -201,7 +506,7 @@
                     if (!this.orchestrationId) return;
                     
                     try {
-                        const response = await fetch(`/api/status_proxy/${this.orchestrationId}`);
+                        const response = await fetch(`/api/job_status?id=${this.orchestrationId}`);
                         
                         if (!response.ok) {
                             throw new Error(`Status check failed: ${response.status}`);
