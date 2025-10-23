@@ -57,27 +57,31 @@
 │  │  ┌──────────────────────────────────────────────────────┐  │     │
 │  │  │  Shared Modules                                      │  │     │
 │  │  │  • auth.py: User validation                          │  │     │
-│  │  │  • status_store.py: In-memory job tracking           │  │     │
-│  │  │  • upstream.py: Upstream provider integration        │  │     │
+│  │  │  • vm_provisioner.py: Direct Azure VM provisioning   │  │     │
+│  │  │  • wireguard_docker_setup.sh: On-VM setup script     │  │     │
 │  │  └──────────────────────────────────────────────────────┘  │     │
 │  └────────────────────────────────────────────────────────────┘     │
 └─────────────────────────────────────────────────────────────────────┘
                            │
-                           │ Calls upstream API
+                           │ Direct Azure SDK calls
                            ▼
 ┌─────────────────────────────────────────────────────────────────────┐
-│                      Upstream Provider API                           │
+│                      Azure Resources                                 │
 │  ┌──────────────────────────────────────────────────────────────┐   │
-│  │  POST /provision - Start VM and WireGuard setup              │   │
-│  │  GET /status/{id} - Check provisioning status                │   │
+│  │  Compute Management API                                       │   │
+│  │  • Create VM (Flatcar Container Linux)                       │   │
+│  │  • Get VM status                                             │   │
+│  │  • Execute Run Command (WireGuard setup)                     │   │
 │  └──────────────────────────────────────────────────────────────┘   │
 │                           │                                           │
 │                           │ Provisions and configures                 │
 │                           ▼                                           │
 │  ┌──────────────────────────────────────────────────────────────┐   │
-│  │  Ephemeral VMs with WireGuard                                │   │
-│  │  • Created on-demand                                         │   │
-│  │  • Auto-teardown (handled by upstream)                       │   │
+│  │  Ephemeral VMs with Docker-based WireGuard                   │   │
+│  │  • Flatcar Container Linux (Standard_B1ls)                   │   │
+│  │  • linuxserver/wireguard Docker container                    │   │
+│  │  • Keys generated on-VM (stateless)                          │   │
+│  │  • Auto-teardown after 30 minutes                            │   │
 │  └──────────────────────────────────────────────────────────────┘   │
 └─────────────────────────────────────────────────────────────────────┘
 ```
@@ -184,32 +188,88 @@ Frontend            job_status Function     Status Store      Background Thread
   │  {confText, ...}      │                      │                  │
 ```
 
-### 4. Auto-teardown Flow
-
-> **Note**: Auto-teardown (e.g., after 30 minutes) is now handled by the upstream provider, not by the SWA Functions. This simplifies the architecture and removes the need for durable timers.
+### 4. Docker-based WireGuard Setup Flow
 
 ```
-Upstream Provider
+VM Provisioner         Azure VM            Run Command         Docker Container
+  │                      │                      │                      │
+  ├─ Create VM           │                      │                      │
+  │  (Flatcar Linux)     │                      │                      │
+  │                      │                      │                      │
+  ├─────────────────────>│                      │                      │
+  │  VM Creation         │                      │                      │
+  │  started             │                      │                      │
+  │                      │                      │                      │
+  │                      ├─ VM boots            │                      │
+  │                      │  (Flatcar + Docker)  │                      │
+  │                      │                      │                      │
+  ├─ Poll VM Status      │                      │                      │
+  ├─────────────────────>│                      │                      │
+  │<─────────────────────┤                      │                      │
+  │  Status: Succeeded   │                      │                      │
+  │                      │                      │                      │
+  ├─ Execute Run Command │                      │                      │
+  ├──────────────────────┼─────────────────────>│                      │
+  │  wireguard_docker_   │                      │                      │
+  │  setup.sh            │                      │                      │
+  │                      │                      │                      │
+  │                      │                      ├─ Generate keys       │
+  │                      │                      │  (wg genkey)         │
+  │                      │                      │                      │
+  │                      │                      ├─ Create wg0.conf     │
+  │                      │                      │                      │
+  │                      │                      ├─ Pull image          │
+  │                      │                      ├─────────────────────>│
+  │                      │                      │  linuxserver/        │
+  │                      │                      │  wireguard           │
+  │                      │                      │                      │
+  │                      │                      ├─ Start container     │
+  │                      │                      ├─────────────────────>│
+  │                      │                      │                      │
+  │                      │                      │                      ├─ WireGuard running
+  │                      │                      │                      │  on UDP 51820
+  │                      │                      │                      │
+  │                      │                      ├─ Output client conf  │
+  │                      │                      │  (between markers)   │
+  │<─────────────────────┼──────────────────────┤                      │
+  │  Run Command output  │                      │                      │
+  │  with client .conf   │                      │                      │
+  │                      │                      │                      │
+  ├─ Extract config      │                      │                      │
+  │  from output         │                      │                      │
+  │                      │                      │                      │
+  ├─ Return to client    │                      │                      │
+  │  Status: Succeeded   │                      │                      │
+  │  confText: [Interf..]│                      │                      │
+```
+
+### 5. Auto-teardown Flow
+
+> **Note**: Auto-teardown after 30 minutes is implemented via VM tags. A separate cleanup process (not implemented in this codebase) can query for VMs with `auto-delete: true` tags older than 30 minutes and delete them.
+
+```
+Cleanup Process (External)
   │
-  ├─ VM Created
+  ├─ Query VMs with auto-delete tag
   │
-  ├─ Start internal timer (30 minutes)
+  ├─ Check creation timestamp
   │
-  ├─ Timer expires
-  │
-  ├─ Delete VM and resources
-  │  • VM instance
-  │  • Network interfaces
-  │  • Public IPs
-  │  • Virtual networks
+  ├─ If > 30 minutes old:
+  │  │
+  │  ├─ Delete VM
+  │  ├─ Delete NIC
+  │  ├─ Delete Public IP
+  │  ├─ Delete VNet
+  │  └─ Delete NSG
   │
   └─ Cleanup complete
 ```
 
-If the upstream provider does not support auto-teardown:
-- Consider adding a cleanup endpoint: `POST /api/cleanup?id={operationId}`
-- Frontend could call this after user disconnects
-- Or implement a scheduled cleanup job separately
+Potential implementation options:
+- Azure Automation runbook (scheduled every 5-10 minutes)
+- Azure Logic App with recurrence trigger
+- Separate Azure Function with timer trigger
+- External cron job using Azure CLI
 
 ## Security Architecture
 
