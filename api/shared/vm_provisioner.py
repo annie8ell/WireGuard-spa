@@ -10,6 +10,7 @@ import base64
 import json
 import re
 import io
+import textwrap
 import paramiko
 from azure.identity import ClientSecretCredential
 from azure.mgmt.compute import ComputeManagementClient
@@ -91,6 +92,12 @@ class VMProvisioner:
         self.subscription_id = os.environ.get('AZURE_SUBSCRIPTION_ID', '')
         self.resource_group = os.environ.get('AZURE_RESOURCE_GROUP', '')
         
+        # Cache the resource group location
+        self._resource_group_location = None
+        # Cache shared network resources
+        self._shared_vnet = None
+        self._shared_nsg = None
+        
         if not is_dry_run():
             success, error, credential = get_azure_credential()
             if not success:
@@ -99,11 +106,6 @@ class VMProvisioner:
             self.credential = credential
             self.compute_client = ComputeManagementClient(credential, self.subscription_id)
             self.network_client = NetworkManagementClient(credential, self.subscription_id)
-            # Cache the resource group location
-            self._resource_group_location = None
-            # Cache shared network resources
-            self._shared_vnet = None
-            self._shared_nsg = None
     
     def _get_resource_group_location(self) -> str:
         """Get the location of the resource group."""
@@ -384,13 +386,12 @@ class VMProvisioner:
             nic_result = nic_poller.result()
             
             # Step 5: Start VM creation asynchronously
-            # Use Flatcar Container Linux for faster Docker-based WireGuard deployment
-            # WireGuard setup happens via cloud-init during boot
-            # Azure Run Command is used only to retrieve the generated config
+            # Use Ubuntu 22.04 LTS for reliable cloud-init support and Docker compatibility
+            # This avoids Flatcar's Ignition provisioning issues on Azure
 
             # Create cloud-init configuration that sets up WireGuard during boot
             cloud_init_config = self._generate_cloud_init_config()
-            
+
             # Build os_profile supporting either SSH public key or admin password
             ssh_pub_key = os.environ.get('SSH_PUBLIC_KEY')
             admin_password = os.environ.get('AZURE_ADMIN_PASSWORD')
@@ -431,10 +432,11 @@ class VMProvisioner:
                 },
                 'storage_profile': {
                     'image_reference': {
-                        # Flatcar Container Linux Stable
-                        'publisher': 'kinvolk',
-                        'offer': 'flatcar-container-linux-free',
-                        'sku': 'stable',
+                        # Ubuntu 22.04 LTS for reliable cloud-init support and Docker compatibility
+                        # This avoids Flatcar's Ignition provisioning issues on Azure
+                        'publisher': 'Canonical',
+                        'offer': '0001-com-ubuntu-server-jammy',
+                        'sku': '22_04-lts-gen2',
                         'version': 'latest'
                     },
                     'os_disk': {
@@ -443,11 +445,6 @@ class VMProvisioner:
                             'storage_account_type': 'Standard_LRS'
                         }
                     }
-                },
-                'plan': {
-                    'publisher': 'kinvolk',
-                    'product': 'flatcar-container-linux-free',
-                    'name': 'stable'
                 },
                 'os_profile': os_profile,
                 'network_profile': {
@@ -462,7 +459,7 @@ class VMProvisioner:
                 }
             }
 
-            # Add cloud-init config as customData for Flatcar Linux
+            # Add cloud-init config as customData for Ubuntu Linux
             if cloud_init_config:
                 vm_params['os_profile']['customData'] = base64.b64encode(
                     cloud_init_config.encode('utf-8')
@@ -547,6 +544,13 @@ class VMProvisioner:
                     conf_text = self._retrieve_wireguard_config_via_run_command(vm_name)
                     
                     if conf_text:
+                        # Replace placeholder IP with actual public IP if needed
+                        if "REPLACE_WITH_PUBLIC_IP" in conf_text or conf_text.startswith("[Interface]"):
+                            conf_text = conf_text.replace("REPLACE_WITH_PUBLIC_IP", ip_address)
+                            # Also fix cases where IP detection failed and we have just ":51820"
+                            if ":51820" in conf_text and not ip_address in conf_text:
+                                conf_text = conf_text.replace(":51820", f"{ip_address}:51820")
+                        
                         logger.info(f"WireGuard setup successful for VM {vm_name}")
                         return True, None, {
                             'vmName': vm_name,
@@ -668,11 +672,11 @@ class VMProvisioner:
             
             # Simple script to read the generated config
             retrieve_script = """#!/bin/bash
-# Read the client config that was generated during boot
-if [ -f /root/client.conf ]; then
-    cat /root/client.conf
+# Read the client config that was generated during boot by the WireGuard setup script
+if [ -f /etc/wireguard/client.conf ]; then
+    cat /etc/wireguard/client.conf
 else
-    echo "ERROR: Client config not found. Setup may still be in progress."
+    echo "ERROR: Client config not found at /etc/wireguard/client.conf. Setup may still be in progress."
     exit 1
 fi
 """
@@ -854,16 +858,34 @@ PersistentKeepalive = 25
     
     def _generate_cloud_init_config(self) -> str:
         """
-        Generate cloud-init configuration for Flatcar Linux.
-        Creates a cloud-init config that sets up WireGuard during boot.
+        Generate cloud-init configuration that writes and runs the WireGuard Docker setup script.
         Returns the cloud-init YAML configuration as a string.
+        Notes:
+        - We embed the content of 'wireguard_docker_setup.sh' to keep a single source of truth.
+        - The script saves the client config at /etc/wireguard/client.conf with extractable markers.
         """
         try:
-            cloud_init_file = os.path.join(os.path.dirname(__file__), 'wireguard-cloud-init.yaml')
-            with open(cloud_init_file, 'r') as f:
-                return f.read()
+            script_path = os.path.join(os.path.dirname(__file__), 'wireguard_docker_setup.sh')
+            with open(script_path, 'r') as f:
+                script_content = f.read().rstrip('\n')
+
+            # Indent script content for cloud-init write_files block
+            indented_script = textwrap.indent(script_content, ' ' * 6)
+
+            cloud_config = f"""#cloud-config
+
+write_files:
+  - path: /usr/local/bin/wireguard_docker_setup.sh
+    permissions: '0755'
+    content: |
+{indented_script}
+
+runcmd:
+  - [ bash, -c, "/usr/local/bin/wireguard_docker_setup.sh" ]
+"""
+            return cloud_config
         except Exception as e:
-            logger.error(f"Error reading cloud-init config: {str(e)}")
+            logger.error(f"Error generating cloud-init config from script: {str(e)}", exc_info=True)
             return None
 
 
