@@ -1,7 +1,7 @@
 #!/bin/bash
 # WireGuard Docker Setup Script
-# This script is executed via Azure Run Command on Flatcar Container Linux
-# It sets up WireGuard in a Docker container and outputs the client configuration
+# This script is executed during VM boot via cloud-init
+# It sets up WireGuard in a Docker container and saves the client configuration
 
 set -e
 
@@ -13,6 +13,7 @@ CLIENT_ADDRESS="10.13.13.2"
 DNS_SERVER="1.1.1.1"
 
 # Get server's public IP using Azure metadata service
+echo "Getting server public IP..."
 SERVER_IP=$(curl -s -H Metadata:true "http://169.254.169.254/metadata/instance/network/interface/0/ipv4/ipAddress/0/publicIpAddress?api-version=2021-02-01&format=text" 2>/dev/null || echo "UNKNOWN")
 
 if [ "$SERVER_IP" = "UNKNOWN" ]; then
@@ -44,6 +45,24 @@ PostDown = iptables -D FORWARD -i %i -j ACCEPT; iptables -D FORWARD -o %i -j ACC
 PublicKey = ${CLIENT_PUBLIC_KEY}
 AllowedIPs = ${CLIENT_ADDRESS}/32
 EOF
+
+# Save client configuration to file (for later retrieval via Run Command)
+cat > /etc/wireguard/client.conf <<EOF
+=== WIREGUARD_CLIENT_CONFIG_START ===
+[Interface]
+PrivateKey = ${CLIENT_PRIVATE_KEY}
+Address = ${CLIENT_ADDRESS}/24
+DNS = ${DNS_SERVER}
+
+[Peer]
+PublicKey = ${PUBLIC_KEY}
+Endpoint = ${SERVER_IP}:${SERVER_PORT}
+AllowedIPs = 0.0.0.0/0, ::/0
+PersistentKeepalive = 25
+=== WIREGUARD_CLIENT_CONFIG_END ===
+EOF
+
+echo "Client config saved to /etc/wireguard/client.conf"
 
 echo "Pulling WireGuard Docker image..."
 docker pull linuxserver/wireguard:latest >/dev/null 2>&1
@@ -79,24 +98,6 @@ if ! docker ps | grep -q wireguard; then
 fi
 
 echo "WireGuard container started successfully"
-
-# Generate client configuration and output it
-# This will be captured by Azure Run Command
-echo "=== WIREGUARD_CLIENT_CONFIG_START ==="
-cat <<EOF
-[Interface]
-PrivateKey = ${CLIENT_PRIVATE_KEY}
-Address = ${CLIENT_ADDRESS}/24
-DNS = ${DNS_SERVER}
-
-[Peer]
-PublicKey = ${PUBLIC_KEY}
-Endpoint = ${SERVER_IP}:${SERVER_PORT}
-AllowedIPs = 0.0.0.0/0, ::/0
-PersistentKeepalive = 25
-EOF
-echo "=== WIREGUARD_CLIENT_CONFIG_END ==="
-
-echo "Setup complete!"
 echo "Server IP: ${SERVER_IP}"
 echo "Server Port: ${SERVER_PORT}"
+echo "Setup complete!"

@@ -141,13 +141,13 @@ class VMProvisioner:
                         except Exception:
                             ip_address = None
                         
-                        # For existing VM in 'Succeeded' state, we need to setup WireGuard if not already done
+                        # For existing VM in 'Succeeded' state, retrieve the generated WireGuard config
                         conf_text = None
                         if vm.provisioning_state == 'Succeeded' and ip_address:
-                            # Try to setup WireGuard via Run Command
-                            conf_text = self._setup_wireguard_via_run_command(vm_name)
+                            # Retrieve WireGuard config via Run Command
+                            conf_text = self._retrieve_wireguard_config_via_run_command(vm_name)
                             if not conf_text:
-                                # Fallback to sample config if Run Command fails
+                                # Fallback to sample config if retrieval fails
                                 conf_text = self._get_sample_config(ip_address)
                         
                         return True, None, {
@@ -301,12 +301,11 @@ class VMProvisioner:
             
             # Step 5: Start VM creation asynchronously
             # Use Flatcar Container Linux for faster Docker-based WireGuard deployment
-            # Note: Flatcar uses Ignition config (not cloud-init), which we'll skip for simplicity.
-            # WireGuard setup will be done via Azure Run Command after VM is ready.
+            # WireGuard setup happens during VM boot via cloud-init
+            # Azure Run Command is used only to retrieve the generated config
             
-            # Generate a temporary SSH key for this VM (will be used for Run Command if needed)
-            # For production, use Key Vault or generate ephemeral keys
-            ssh_public_key = 'ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQC7VK8vGNQQoKlmBV6ZxLmTlJ5d9z3VqLK9XZ6hXJ0eC0yLnF8ZH5mD6K5BqE8dF3MxR9hJN8dG5pQ6L7zQ9F0sX5d3P8Y7mN9Z6rT4K8sQ5pF0xJ6K5V8yL3M0sR9hJN8dG5pQ6L7zQ9F0 wireguard-vm'
+            # Create cloud-init configuration that sets up WireGuard on first boot
+            cloud_init_config = self._generate_cloud_init_config()
             
             vm_params = {
                 'location': location,
@@ -331,14 +330,9 @@ class VMProvisioner:
                 'os_profile': {
                     'computer_name': vm_name,
                     'admin_username': admin_username,
+                    'custom_data': base64.b64encode(cloud_init_config.encode()).decode(),
                     'linux_configuration': {
-                        'disable_password_authentication': True,
-                        'ssh': {
-                            'public_keys': [{
-                                'path': f'/home/{admin_username}/.ssh/authorized_keys',
-                                'key_data': ssh_public_key
-                            }]
-                        }
+                        'disable_password_authentication': True
                     }
                 },
                 'network_profile': {
@@ -426,9 +420,9 @@ class VMProvisioner:
                     except Exception:
                         ip_address = None
                     
-                    # Execute Run Command to setup WireGuard Docker container and get config
-                    logger.info(f"VM {vm_name} is ready, executing WireGuard setup via Run Command")
-                    conf_text = self._setup_wireguard_via_run_command(vm_name)
+                    # Retrieve the WireGuard config that was generated during VM boot
+                    logger.info(f"VM {vm_name} is ready, retrieving WireGuard config via Run Command")
+                    conf_text = self._retrieve_wireguard_config_via_run_command(vm_name)
                     
                     if conf_text:
                         logger.info(f"WireGuard setup successful for VM {vm_name}")
@@ -559,27 +553,62 @@ class VMProvisioner:
             logger.error(f"Error deleting VM {vm_name}: {str(e)}", exc_info=True)
             return False, f"Failed to delete VM: {str(e)}"
     
-    def _setup_wireguard_via_run_command(self, vm_name: str) -> Optional[str]:
+    def _generate_cloud_init_config(self) -> str:
         """
-        Execute Azure Run Command to setup WireGuard in Docker container and retrieve client config.
-        Returns the WireGuard client configuration or None if setup fails.
+        Generate cloud-init configuration that sets up WireGuard on VM boot.
+        The script generates keys, starts the Docker container, and saves the client config.
+        """
+        # Read the setup script
+        script_path = os.path.join(os.path.dirname(__file__), 'wireguard_docker_setup.sh')
+        try:
+            with open(script_path, 'r') as f:
+                setup_script = f.read()
+        except Exception as e:
+            logger.error(f"Failed to read setup script: {str(e)}")
+            # Fallback to inline script
+            setup_script = """#!/bin/bash
+set -e
+# Generate keys and start WireGuard container
+echo "WireGuard setup will be configured via Run Command"
+"""
+        
+        # Create cloud-init config that runs the setup script on boot
+        cloud_init = f"""#cloud-config
+write_files:
+  - path: /opt/wireguard-setup.sh
+    permissions: '0755'
+    content: |
+{chr(10).join('      ' + line for line in setup_script.split(chr(10)))}
+
+runcmd:
+  - /opt/wireguard-setup.sh > /var/log/wireguard-setup.log 2>&1
+"""
+        return cloud_init
+    
+    def _retrieve_wireguard_config_via_run_command(self, vm_name: str) -> Optional[str]:
+        """
+        Execute Azure Run Command to retrieve the generated WireGuard client config.
+        WireGuard setup happens during VM boot, this only retrieves the config.
+        Returns the WireGuard client configuration or None if retrieval fails.
         """
         try:
-            logger.info(f"Executing Run Command on VM {vm_name} to setup WireGuard")
+            logger.info(f"Executing Run Command on VM {vm_name} to retrieve WireGuard config")
             
-            # Read the setup script
-            script_path = os.path.join(os.path.dirname(__file__), 'wireguard_docker_setup.sh')
-            try:
-                with open(script_path, 'r') as f:
-                    setup_script = f.read()
-            except Exception as e:
-                logger.error(f"Failed to read setup script: {str(e)}")
-                return None
+            # Simple script to read the generated config
+            retrieve_script = """#!/bin/bash
+# Read the client config that was generated during boot
+if [ -f /etc/wireguard/client.conf ]; then
+    cat /etc/wireguard/client.conf
+else
+    echo "ERROR: Client config not found. Setup may still be in progress."
+    exit 1
+fi
+"""
             
-            # Execute Run Command with the script
+            # Execute Run Command
             run_command_params = {
                 'command_id': 'RunShellScript',
-                'script': [setup_script]
+                'script': [retrieve_script]
             }
             
             logger.info(f"Starting Run Command on VM {vm_name}")
@@ -589,9 +618,9 @@ class VMProvisioner:
                 run_command_params
             )
             
-            # Wait for the command to complete (timeout after 5 minutes)
-            logger.info("Waiting for Run Command to complete (timeout: 300s)...")
-            result = poller.result(timeout=300)
+            # Wait for the command to complete (timeout after 1 minute, retrieval is fast)
+            logger.info("Waiting for Run Command to complete (timeout: 60s)...")
+            result = poller.result(timeout=60)
             
             # Extract output
             if result.value and len(result.value) > 0:
@@ -602,11 +631,11 @@ class VMProvisioner:
                 conf_text = self._extract_wireguard_config(output)
                 
                 if conf_text:
-                    logger.info(f"Successfully extracted WireGuard config from Run Command output")
+                    logger.info(f"Successfully retrieved WireGuard config from VM")
                     return conf_text
                 else:
-                    logger.warning(f"Could not extract WireGuard config from Run Command output")
-                    logger.debug(f"Run Command output: {output[:1000]}")  # Log first 1000 chars
+                    logger.warning(f"Could not extract WireGuard config from output")
+                    logger.debug(f"Run Command output: {output[:500]}")
                     return None
             else:
                 logger.error(f"Run Command returned no output")
