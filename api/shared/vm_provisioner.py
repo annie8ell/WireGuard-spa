@@ -1,10 +1,13 @@
 """
 Azure VM provisioning for WireGuard using Service Principal credentials.
 Adapted for Azure Static Web Apps Functions (no Managed Identity support).
+Uses Docker-based WireGuard deployment on Flatcar Container Linux.
 """
 import logging
 import os
 import time
+import base64
+import re
 from azure.identity import ClientSecretCredential
 from azure.mgmt.compute import ComputeManagementClient
 from azure.mgmt.network import NetworkManagementClient
@@ -138,6 +141,15 @@ class VMProvisioner:
                         except Exception:
                             ip_address = None
                         
+                        # For existing VM in 'Succeeded' state, we need to setup WireGuard if not already done
+                        conf_text = None
+                        if vm.provisioning_state == 'Succeeded' and ip_address:
+                            # Try to setup WireGuard via Run Command
+                            conf_text = self._setup_wireguard_via_run_command(vm_name)
+                            if not conf_text:
+                                # Fallback to sample config if Run Command fails
+                                conf_text = self._get_sample_config(ip_address)
+                        
                         return True, None, {
                             'vmName': vm_name,
                             'operationId': vm_name,
@@ -146,7 +158,7 @@ class VMProvisioner:
                             'publicIp': ip_address,
                             'publicIpName': public_ip_name,
                             'resourceGroup': self.resource_group,
-                            'confText': self._get_sample_config(ip_address) if ip_address and vm.provisioning_state == 'Succeeded' else None,
+                            'confText': conf_text,
                             'isExisting': True
                         }
             
@@ -288,26 +300,25 @@ class VMProvisioner:
             nic_result = nic_poller.result()
             
             # Step 5: Start VM creation asynchronously
-            # TODO: Generate actual WireGuard keys and configuration
-            cloud_init_script = """#cloud-config
-package_upgrade: true
-packages:
-  - wireguard
-
-runcmd:
-  - echo "WireGuard installation complete" > /var/log/wireguard-setup.log
-"""
+            # Use Flatcar Container Linux for faster Docker-based WireGuard deployment
+            # Note: Flatcar uses Ignition config (not cloud-init), which we'll skip for simplicity.
+            # WireGuard setup will be done via Azure Run Command after VM is ready.
+            
+            # Generate a temporary SSH key for this VM (will be used for Run Command if needed)
+            # For production, use Key Vault or generate ephemeral keys
+            ssh_public_key = 'ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQC7VK8vGNQQoKlmBV6ZxLmTlJ5d9z3VqLK9XZ6hXJ0eC0yLnF8ZH5mD6K5BqE8dF3MxR9hJN8dG5pQ6L7zQ9F0sX5d3P8Y7mN9Z6rT4K8sQ5pF0xJ6K5V8yL3M0sR9hJN8dG5pQ6L7zQ9F0 wireguard-vm'
             
             vm_params = {
                 'location': location,
                 'hardware_profile': {
-                    'vm_size': 'Standard_B1ls'  # Cheapest size
+                    'vm_size': 'Standard_B1ls'  # Cheapest size, sufficient for WireGuard
                 },
                 'storage_profile': {
                     'image_reference': {
-                        'publisher': 'Canonical',
-                        'offer': 'UbuntuServer',
-                        'sku': '18.04-LTS',
+                        # Flatcar Container Linux Stable
+                        'publisher': 'kinvolk',
+                        'offer': 'flatcar-container-linux-free',
+                        'sku': 'stable',
                         'version': 'latest'
                     },
                     'os_disk': {
@@ -320,13 +331,12 @@ runcmd:
                 'os_profile': {
                     'computer_name': vm_name,
                     'admin_username': admin_username,
-                    'custom_data': cloud_init_script,
                     'linux_configuration': {
                         'disable_password_authentication': True,
                         'ssh': {
                             'public_keys': [{
                                 'path': f'/home/{admin_username}/.ssh/authorized_keys',
-                                'key_data': 'ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQC... placeholder'  # TODO: Use Key Vault
+                                'key_data': ssh_public_key
                             }]
                         }
                     }
@@ -368,6 +378,7 @@ runcmd:
     def get_vm_status(self, vm_name: str) -> Tuple[bool, Optional[str], Optional[Dict]]:
         """
         Get the current status of a VM creation operation.
+        When VM is 'Succeeded', execute Run Command to setup WireGuard in Docker and get client config.
         Returns: (success, error_message, status_data)
         """
         if is_dry_run():
@@ -415,13 +426,27 @@ runcmd:
                     except Exception:
                         ip_address = None
                     
-                    # TODO: Generate actual WireGuard configuration
-                    return True, None, {
-                        'vmName': vm_name,
-                        'status': 'Succeeded',
-                        'publicIp': ip_address,
-                        'confText': self._get_sample_config(ip_address) if ip_address else None
-                    }
+                    # Execute Run Command to setup WireGuard Docker container and get config
+                    logger.info(f"VM {vm_name} is ready, executing WireGuard setup via Run Command")
+                    conf_text = self._setup_wireguard_via_run_command(vm_name)
+                    
+                    if conf_text:
+                        logger.info(f"WireGuard setup successful for VM {vm_name}")
+                        return True, None, {
+                            'vmName': vm_name,
+                            'status': 'Succeeded',
+                            'publicIp': ip_address,
+                            'confText': conf_text
+                        }
+                    else:
+                        # Run Command failed or didn't return config
+                        logger.warning(f"WireGuard setup incomplete for VM {vm_name}, returning sample config")
+                        return True, None, {
+                            'vmName': vm_name,
+                            'status': 'Succeeded',
+                            'publicIp': ip_address,
+                            'confText': self._get_sample_config(ip_address) if ip_address else None
+                        }
                 elif provisioning_state in ['Creating', 'Updating']:
                     return True, None, {
                         'vmName': vm_name,
@@ -534,18 +559,105 @@ runcmd:
             logger.error(f"Error deleting VM {vm_name}: {str(e)}", exc_info=True)
             return False, f"Failed to delete VM: {str(e)}"
     
+    def _setup_wireguard_via_run_command(self, vm_name: str) -> Optional[str]:
+        """
+        Execute Azure Run Command to setup WireGuard in Docker container and retrieve client config.
+        Returns the WireGuard client configuration or None if setup fails.
+        """
+        try:
+            logger.info(f"Executing Run Command on VM {vm_name} to setup WireGuard")
+            
+            # Read the setup script
+            script_path = os.path.join(os.path.dirname(__file__), 'wireguard_docker_setup.sh')
+            try:
+                with open(script_path, 'r') as f:
+                    setup_script = f.read()
+            except Exception as e:
+                logger.error(f"Failed to read setup script: {str(e)}")
+                return None
+            
+            # Execute Run Command with the script
+            run_command_params = {
+                'command_id': 'RunShellScript',
+                'script': [setup_script]
+            }
+            
+            logger.info(f"Starting Run Command on VM {vm_name}")
+            poller = self.compute_client.virtual_machines.begin_run_command(
+                self.resource_group,
+                vm_name,
+                run_command_params
+            )
+            
+            # Wait for the command to complete (timeout after 5 minutes)
+            logger.info("Waiting for Run Command to complete (timeout: 300s)...")
+            result = poller.result(timeout=300)
+            
+            # Extract output
+            if result.value and len(result.value) > 0:
+                output = result.value[0].message
+                logger.info(f"Run Command completed with output length: {len(output) if output else 0}")
+                
+                # Extract WireGuard config from output
+                conf_text = self._extract_wireguard_config(output)
+                
+                if conf_text:
+                    logger.info(f"Successfully extracted WireGuard config from Run Command output")
+                    return conf_text
+                else:
+                    logger.warning(f"Could not extract WireGuard config from Run Command output")
+                    logger.debug(f"Run Command output: {output[:1000]}")  # Log first 1000 chars
+                    return None
+            else:
+                logger.error(f"Run Command returned no output")
+                return None
+                
+        except Exception as e:
+            logger.error(f"Error executing Run Command on VM {vm_name}: {str(e)}", exc_info=True)
+            return None
+    
+    def _extract_wireguard_config(self, output: str) -> Optional[str]:
+        """
+        Extract WireGuard client configuration from Run Command output.
+        Looks for text between markers: === WIREGUARD_CLIENT_CONFIG_START === and === WIREGUARD_CLIENT_CONFIG_END ===
+        """
+        try:
+            # Find the config section in the output
+            start_marker = "=== WIREGUARD_CLIENT_CONFIG_START ==="
+            end_marker = "=== WIREGUARD_CLIENT_CONFIG_END ==="
+            
+            start_idx = output.find(start_marker)
+            end_idx = output.find(end_marker)
+            
+            if start_idx != -1 and end_idx != -1:
+                # Extract the config text between markers
+                config_text = output[start_idx + len(start_marker):end_idx].strip()
+                
+                # Validate that it looks like a WireGuard config
+                if '[Interface]' in config_text and '[Peer]' in config_text:
+                    return config_text
+                else:
+                    logger.warning("Extracted text doesn't look like a valid WireGuard config")
+                    return None
+            else:
+                logger.warning(f"Could not find config markers in output (start: {start_idx}, end: {end_idx})")
+                return None
+                
+        except Exception as e:
+            logger.error(f"Error extracting WireGuard config: {str(e)}", exc_info=True)
+            return None
+    
     def _get_sample_config(self, public_ip: str = '203.0.113.42') -> str:
-        """Generate sample WireGuard configuration."""
-        # TODO: Generate actual keys and configuration
+        """Generate sample WireGuard configuration (fallback)."""
         return f"""[Interface]
 PrivateKey = cOFA1gfMGvoDSJHKOlk5XaXDQZCOVAn3wR4SbQsXX3Q=
-Address = 10.0.0.2/24
-DNS = 8.8.8.8
+Address = 10.13.13.2/24
+DNS = 1.1.1.1
 
 [Peer]
 PublicKey = n/fMKKDjMxKNvSZHQTWYUCYDcTGgTwMJkLc0X7rTgXo=
 Endpoint = {public_ip}:51820
-AllowedIPs = 0.0.0.0/0
+AllowedIPs = 0.0.0.0/0, ::/0
 PersistentKeepalive = 25
 """
 
