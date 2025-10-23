@@ -2,7 +2,7 @@
 
 ##############################################################################
 # Script: setup-all-secrets.sh
-# Description: Automated setup of Azure permissions and GitHub secrets
+# Description: Automated setup of Azure permissions and GitHub secrets for SWA Functions
 # Usage: ./setup-all-secrets.sh [OPTIONS]
 ##############################################################################
 
@@ -21,27 +21,28 @@ RESOURCE_GROUP=""
 NON_INTERACTIVE=false
 FORCE=false
 DRY_RUN=false
-SP_NAME="wireguard-spa-deployer"
+TEARDOWN=false
+SP_NAME="wireguard-spa-vm-provisioner"
 
 # Function to display usage
 usage() {
     cat << EOF
 Usage: $0 [OPTIONS]
 
-Automated setup of Azure permissions and GitHub repository secrets for WireGuard SPA.
+Automated setup of Azure permissions and GitHub repository secrets for WireGuard SPA (SWA Functions).
 
 This script will:
 1. Discover Azure resources (or use provided values)
-2. Create/verify Service Principal with appropriate permissions
-3. Enable Function App managed identity with required roles
-4. Retrieve all necessary credentials
-5. Set GitHub repository secrets automatically
+2. Create/verify Service Principal with VM provisioning permissions (scoped to resource group)
+3. Retrieve Static Web App deployment token
+4. Set GitHub repository secrets automatically
 
 Options:
   --resource-group <name>   Specify Azure resource group name
   --non-interactive         Run without prompts (use defaults/discovered values)
   --force                   Override existing secrets
   --dry-run                 Show what would be done without making changes
+  --teardown                Remove Service Principal and GitHub secrets
   --help, -h                Show this help message
 
 Examples:
@@ -118,9 +119,10 @@ check_prerequisites() {
         log_success "jq found"
     fi
     
-    if [[ "$missing" == "true" ]]; then
-        log_error "Missing required tools. Please install them first."
-        exit 1
+    # Skip Azure and GitHub login checks in dry-run mode
+    if [[ "$DRY_RUN" == "true" ]]; then
+        log_info "[DRY RUN] Skipping Azure and GitHub authentication checks"
+        return 0
     fi
     
     # Check Azure login
@@ -146,6 +148,15 @@ check_prerequisites() {
 # Discover Azure resources
 discover_resources() {
     log_step "Discovering Azure Resources"
+    
+    if [[ "$DRY_RUN" == "true" ]]; then
+        log_info "[DRY RUN] Would discover Azure resources"
+        SUBSCRIPTION_ID="dummy-subscription-id"
+        RESOURCE_GROUP="${RESOURCE_GROUP:-dummy-resource-group}"
+        SWA_NAME="dummy-swa-name"
+        log_info "Using dummy values for dry run"
+        return 0
+    fi
     
     SUBSCRIPTION_ID=$(az account show --query id -o tsv)
     log_info "Using subscription: $SUBSCRIPTION_ID"
@@ -193,22 +204,15 @@ discover_resources() {
     
     log_info "Using resource group: $RESOURCE_GROUP"
     
-    # Find Function App
-    FUNCTION_APP_NAME=$(az functionapp list --resource-group "$RESOURCE_GROUP" --query '[0].name' -o tsv)
-    if [[ -z "$FUNCTION_APP_NAME" || "$FUNCTION_APP_NAME" == "null" ]]; then
-        log_error "No Function App found in resource group: $RESOURCE_GROUP"
-        exit 1
-    fi
-    log_success "Found Function App: $FUNCTION_APP_NAME"
-    
     # Find Static Web App
     SWA_NAME=$(az staticwebapp list --resource-group "$RESOURCE_GROUP" --query '[0].name' -o tsv)
     if [[ -z "$SWA_NAME" || "$SWA_NAME" == "null" ]]; then
-        log_warning "No Static Web App found in resource group (this may be okay)"
-        SWA_NAME=""
-    else
-        log_success "Found Static Web App: $SWA_NAME"
+        log_error "No Static Web App found in resource group: $RESOURCE_GROUP"
+        log_info "Available Static Web Apps:"
+        az staticwebapp list --query "[].name" -o tsv
+        exit 1
     fi
+    log_success "Found Static Web App: $SWA_NAME"
 }
 
 # Create or verify Service Principal
@@ -264,12 +268,12 @@ setup_service_principal() {
         fi
     fi
     
-    # Create new Service Principal
-    log_info "Creating Service Principal with Contributor role on resource group..."
+    # Create new Service Principal with scoped permissions
+    log_info "Creating Service Principal with VM Contributor role on resource group..."
     
     local sp_output=$(az ad sp create-for-rbac \
         --name "$SP_NAME" \
-        --role Contributor \
+        --role "Virtual Machine Contributor" \
         --scopes "/subscriptions/$SUBSCRIPTION_ID/resourceGroups/$RESOURCE_GROUP" \
         --sdk-auth)
     
@@ -278,85 +282,16 @@ setup_service_principal() {
     SP_APP_ID=$(echo "$sp_output" | jq -r '.clientId')
     
     log_success "Service Principal created: $SP_APP_ID"
-}
-
-# Enable and configure Function App managed identity
-setup_managed_identity() {
-    log_step "Configuring Function App Managed Identity"
     
-    if [[ "$DRY_RUN" == "true" ]]; then
-        log_info "[DRY RUN] Would enable managed identity and assign roles for: $FUNCTION_APP_NAME"
-        return 0
-    fi
-    
-    # Enable system-assigned managed identity
-    log_info "Enabling system-assigned managed identity..."
-    az functionapp identity assign \
-        --name "$FUNCTION_APP_NAME" \
-        --resource-group "$RESOURCE_GROUP" \
-        --output none
-    
-    # Get principal ID
-    PRINCIPAL_ID=$(az functionapp identity show \
-        --name "$FUNCTION_APP_NAME" \
-        --resource-group "$RESOURCE_GROUP" \
-        --query principalId -o tsv)
-    
-    log_success "Managed identity enabled: $PRINCIPAL_ID"
-    
-    # Assign roles
-    local scope="/subscriptions/$SUBSCRIPTION_ID/resourceGroups/$RESOURCE_GROUP"
-    
-    log_info "Assigning Virtual Machine Contributor role..."
-    az role assignment create \
-        --assignee "$PRINCIPAL_ID" \
-        --role "Virtual Machine Contributor" \
-        --scope "$scope" \
-        --output none 2>/dev/null || log_warning "Role may already be assigned"
-    
+    # Add Network Contributor role as well
     log_info "Assigning Network Contributor role..."
     az role assignment create \
-        --assignee "$PRINCIPAL_ID" \
+        --assignee "$SP_APP_ID" \
         --role "Network Contributor" \
-        --scope "$scope" \
+        --scope "/subscriptions/$SUBSCRIPTION_ID/resourceGroups/$RESOURCE_GROUP" \
         --output none 2>/dev/null || log_warning "Role may already be assigned"
     
-    log_success "Roles assigned to managed identity"
-}
-
-# Retrieve Function App publish profile
-get_function_publish_profile() {
-    log_step "Retrieving Function App Publish Profile"
-    
-    if [[ "$DRY_RUN" == "true" ]]; then
-        log_info "[DRY RUN] Would retrieve publish profile for: $FUNCTION_APP_NAME"
-        FUNCTION_PUBLISH_PROFILE="[DRY RUN - PLACEHOLDER]"
-        return 0
-    fi
-    
-    # Get the directory where this script is located
-    local script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-    local helper_script="$script_dir/get-function-publish-profile.sh"
-    
-    if [[ -f "$helper_script" ]]; then
-        log_info "Using helper script to fetch publish profile..."
-        FUNCTION_PUBLISH_PROFILE=$("$helper_script" "$FUNCTION_APP_NAME" "$RESOURCE_GROUP" 2>/dev/null)
-        if [[ $? -eq 0 && -n "$FUNCTION_PUBLISH_PROFILE" ]]; then
-            log_success "Publish profile retrieved via helper script"
-            return 0
-        else
-            log_warning "Helper script failed, falling back to direct az command"
-        fi
-    fi
-    
-    # Fallback to direct az command if helper script not available or failed
-    log_info "Fetching publish profile directly..."
-    FUNCTION_PUBLISH_PROFILE=$(az functionapp deployment list-publishing-profiles \
-        --name "$FUNCTION_APP_NAME" \
-        --resource-group "$RESOURCE_GROUP" \
-        --xml)
-    
-    log_success "Publish profile retrieved"
+    log_success "VM and Network Contributor roles assigned to Service Principal"
 }
 
 # Retrieve Static Web App deployment token
@@ -407,9 +342,7 @@ set_github_secrets() {
     if [[ "$DRY_RUN" == "true" ]]; then
         log_info "[DRY RUN] Would set the following GitHub secrets:"
         echo "  - AZURE_CREDENTIALS"
-        echo "  - AZURE_FUNCTIONAPP_PUBLISH_PROFILE"
-        echo "  - AZURE_FUNCTIONAPP_NAME"
-        [[ -n "$SWA_TOKEN" ]] && echo "  - AZURE_STATIC_WEB_APPS_API_TOKEN"
+        echo "  - AZURE_STATIC_WEB_APPS_API_TOKEN"
         return 0
     fi
 
@@ -433,31 +366,13 @@ set_github_secrets() {
     fi
     log_success "AZURE_CREDENTIALS set"
     
-    # Set AZURE_FUNCTIONAPP_PUBLISH_PROFILE
-    log_info "Setting AZURE_FUNCTIONAPP_PUBLISH_PROFILE..."
-    if ! echo "$FUNCTION_PUBLISH_PROFILE" | gh secret set AZURE_FUNCTIONAPP_PUBLISH_PROFILE --repo "$REPO"; then
-        log_error "Failed to set AZURE_FUNCTIONAPP_PUBLISH_PROFILE for '$REPO'"
+    # Set SWA token
+    log_info "Setting AZURE_STATIC_WEB_APPS_API_TOKEN..."
+    if ! echo "$SWA_TOKEN" | gh secret set AZURE_STATIC_WEB_APPS_API_TOKEN --repo "$REPO"; then
+        log_error "Failed to set AZURE_STATIC_WEB_APPS_API_TOKEN for '$REPO'"
         exit 1
     fi
-    log_success "AZURE_FUNCTIONAPP_PUBLISH_PROFILE set"
-    
-    # Set AZURE_FUNCTIONAPP_NAME
-    log_info "Setting AZURE_FUNCTIONAPP_NAME..."
-    if ! echo "$FUNCTION_APP_NAME" | gh secret set AZURE_FUNCTIONAPP_NAME --repo "$REPO"; then
-        log_error "Failed to set AZURE_FUNCTIONAPP_NAME for '$REPO'"
-        exit 1
-    fi
-    log_success "AZURE_FUNCTIONAPP_NAME set"
-    
-    # Set SWA token if available
-    if [[ -n "$SWA_TOKEN" ]]; then
-        log_info "Setting AZURE_STATIC_WEB_APPS_API_TOKEN..."
-        if ! echo "$SWA_TOKEN" | gh secret set AZURE_STATIC_WEB_APPS_API_TOKEN --repo "$REPO"; then
-            log_error "Failed to set AZURE_STATIC_WEB_APPS_API_TOKEN for '$REPO'"
-            exit 1
-        fi
-        log_success "AZURE_STATIC_WEB_APPS_API_TOKEN set"
-    fi
+    log_success "AZURE_STATIC_WEB_APPS_API_TOKEN set"
 }
 
 # Verify setup
@@ -474,7 +389,8 @@ verify_setup() {
     
     local all_good=true
     
-    for secret in "AZURE_CREDENTIALS" "AZURE_FUNCTIONAPP_PUBLISH_PROFILE" "AZURE_FUNCTIONAPP_NAME"; do
+    # Check required secrets
+    for secret in "AZURE_CREDENTIALS" "AZURE_STATIC_WEB_APPS_API_TOKEN"; do
         if echo "$secrets" | grep -q "^$secret"; then
             log_success "✓ $secret is set"
         else
@@ -482,14 +398,6 @@ verify_setup() {
             all_good=false
         fi
     done
-    
-    if [[ -n "$SWA_NAME" ]]; then
-        if echo "$secrets" | grep -q "^AZURE_STATIC_WEB_APPS_API_TOKEN"; then
-            log_success "✓ AZURE_STATIC_WEB_APPS_API_TOKEN is set"
-        else
-            log_warning "⚠ AZURE_STATIC_WEB_APPS_API_TOKEN is NOT set"
-        fi
-    fi
     
     if [[ "$all_good" == "true" ]]; then
         log_success "All required secrets are configured!"
@@ -499,8 +407,43 @@ verify_setup() {
     fi
 }
 
-# Main execution
-main() {
+# Function to tear down secrets and resources
+teardown() {
+    log_step "Tearing Down Secrets and Resources"
+    
+    if [[ "$DRY_RUN" == "true" ]]; then
+        log_info "[DRY RUN] Would tear down Service Principal and GitHub secrets"
+        return 0
+    fi
+    
+    # Confirm teardown
+    if [[ "$NON_INTERACTIVE" == "false" ]]; then
+        echo -n "This will delete the Service Principal '$SP_NAME' and remove GitHub secrets. Continue? (y/N): "
+        read confirm
+        if [[ "$confirm" != "y" && "$confirm" != "Y" ]]; then
+            log_info "Teardown cancelled"
+            exit 0
+        fi
+    fi
+    
+    # Remove GitHub secrets
+    log_info "Removing GitHub secrets..."
+    gh secret delete AZURE_CREDENTIALS --repo "$REPO" 2>/dev/null || log_warning "AZURE_CREDENTIALS not found or already removed"
+    gh secret delete AZURE_STATIC_WEB_APPS_API_TOKEN --repo "$REPO" 2>/dev/null || log_warning "AZURE_STATIC_WEB_APPS_API_TOKEN not found or already removed"
+    log_success "GitHub secrets removed"
+    
+    # Delete Service Principal
+    log_info "Deleting Service Principal..."
+    SP_APP_ID=$(az ad sp list --display-name "$SP_NAME" --query '[0].appId' -o tsv 2>/dev/null)
+    if [[ -n "$SP_APP_ID" && "$SP_APP_ID" != "null" ]]; then
+        az ad sp delete --id "$SP_APP_ID" 2>/dev/null || log_warning "Failed to delete Service Principal"
+        log_success "Service Principal deleted"
+    else
+        log_warning "Service Principal '$SP_NAME' not found"
+    fi
+    
+    log_success "Teardown complete!"
+}
     # Parse arguments
     while [[ $# -gt 0 ]]; do
         case $1 in
@@ -518,6 +461,10 @@ main() {
                 ;;
             --dry-run)
                 DRY_RUN=true
+                shift
+                ;;
+            --teardown)
+                TEARDOWN=true
                 shift
                 ;;
             --help|-h)
@@ -540,12 +487,16 @@ main() {
         echo ""
     fi
     
+    # Handle teardown
+    if [[ "$TEARDOWN" == "true" ]]; then
+        teardown
+        exit 0
+    fi
+    
     # Run setup steps
     check_prerequisites
     discover_resources
     setup_service_principal
-    setup_managed_identity
-    get_function_publish_profile
     get_swa_token
     set_github_secrets
     verify_setup
@@ -562,8 +513,7 @@ main() {
         echo ""
         log_info "Next steps:"
         echo "  1. Run validation workflow: gh workflow run validate-secrets.yml"
-        echo "  2. Provision infrastructure: gh workflow run infra-provision-and-deploy.yml"
-        echo "  3. Deploy application: gh workflow run deploy-backend.yml && gh workflow run deploy-frontend.yml"
+        echo "  2. Deploy application: gh workflow run azure-static-web-apps.yml"
         echo ""
         log_info "For more information, see: SETUP-CREDENTIALS.md"
     fi

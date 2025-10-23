@@ -12,14 +12,44 @@ SERVER_ADDRESS="10.13.13.1"
 CLIENT_ADDRESS="10.13.13.2"
 DNS_SERVER="1.1.1.1"
 
-# Get server's public IP using Azure metadata service
+# Get server's public IP - use ifconfig.me as primary method
 echo "Getting server public IP..."
-SERVER_IP=$(curl -s -H Metadata:true "http://169.254.169.254/metadata/instance/network/interface/0/ipv4/ipAddress/0/publicIpAddress?api-version=2021-02-01&format=text" 2>/dev/null || echo "UNKNOWN")
 
-if [ "$SERVER_IP" = "UNKNOWN" ]; then
-    echo "Warning: Could not get public IP from Azure metadata, trying alternative method"
-    SERVER_IP=$(curl -s ifconfig.me 2>/dev/null || echo "UNKNOWN")
+# Primary method: ifconfig.me (most reliable)
+echo "Trying ifconfig.me..."
+curl -s --max-time 10 ifconfig.me > /tmp/server_ip.txt 2>/dev/null
+if [ -s /tmp/server_ip.txt ] && [[ "$(cat /tmp/server_ip.txt)" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    SERVER_IP=$(cat /tmp/server_ip.txt | tr -d '\n' | tr -d '\r')
+    echo "Got IP from ifconfig.me: $SERVER_IP"
+else
+    echo "ifconfig.me failed, trying Azure metadata..."
+    # Fallback: Azure metadata service
+    curl -s --max-time 10 -H Metadata:true "http://169.254.169.254/metadata/instance/network/interface/0/ipv4/ipAddress/0/publicIpAddress?api-version=2021-02-01&format=text" > /tmp/server_ip.txt 2>/dev/null
+    if [ -s /tmp/server_ip.txt ] && [[ "$(cat /tmp/server_ip.txt)" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+        SERVER_IP=$(cat /tmp/server_ip.txt | tr -d '\n' | tr -d '\r')
+        echo "Got IP from Azure metadata: $SERVER_IP"
+    else
+        echo "Azure metadata failed, trying alternatives..."
+        # Final fallback: alternative services
+        for service in "https://api.ipify.org" "https://ipv4.icanhazip.com" "https://checkip.amazonaws.com"; do
+            echo "Trying $service..."
+            curl -s --max-time 5 "$service" > /tmp/server_ip.txt 2>/dev/null
+            if [ -s /tmp/server_ip.txt ] && [[ "$(cat /tmp/server_ip.txt)" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+                SERVER_IP=$(cat /tmp/server_ip.txt | tr -d '\n' | tr -d '\r')
+                echo "Got IP from $service: $SERVER_IP"
+                break
+            fi
+        done
+    fi
 fi
+
+# Final fallback
+if [ -z "$SERVER_IP" ]; then
+    echo "Warning: Could not determine public IP, using placeholder"
+    SERVER_IP="REPLACE_WITH_PUBLIC_IP"
+fi
+
+echo "Final SERVER_IP: '$SERVER_IP'"
 
 # Generate keys using a temporary container with wireguard-tools
 echo "Generating WireGuard keys..."

@@ -7,10 +7,14 @@ import logging
 import os
 import time
 import base64
+import json
 import re
+import io
+import paramiko
 from azure.identity import ClientSecretCredential
 from azure.mgmt.compute import ComputeManagementClient
 from azure.mgmt.network import NetworkManagementClient
+from azure.mgmt.resource import ResourceManagementClient
 from typing import Tuple, Optional, Dict
 
 logger = logging.getLogger(__name__)
@@ -95,13 +99,147 @@ class VMProvisioner:
             self.credential = credential
             self.compute_client = ComputeManagementClient(credential, self.subscription_id)
             self.network_client = NetworkManagementClient(credential, self.subscription_id)
+            # Cache the resource group location
+            self._resource_group_location = None
+            # Cache shared network resources
+            self._shared_vnet = None
+            self._shared_nsg = None
     
-    def get_or_create_vm(self, location: str = 'eastus', admin_username: str = 'azureuser') -> Tuple[bool, Optional[str], Optional[Dict]]:
+    def _get_resource_group_location(self) -> str:
+        """Get the location of the resource group."""
+        if self._resource_group_location:
+            return self._resource_group_location
+        
+        if is_dry_run():
+            # For dry run, default to westeurope since that's what the user specified
+            return 'westeurope'
+        
+        try:
+            resource_client = ResourceManagementClient(self.credential, self.subscription_id)
+            rg = resource_client.resource_groups.get(self.resource_group)
+            self._resource_group_location = rg.location
+            return self._resource_group_location
+        except Exception as e:
+            logger.warning(f"Could not get resource group location, defaulting to westeurope: {e}")
+            return 'westeurope'
+    
+    def _get_or_create_shared_network_resources(self, location: str):
+        """Get or create shared network resources (VNet and NSG) that can be reused across VMs."""
+        if self._shared_vnet and self._shared_nsg:
+            return self._shared_vnet, self._shared_nsg
+        
+        if is_dry_run():
+            logger.info("DRY RUN: Would get or create shared network resources")
+            # Mock shared resources for dry run
+            self._shared_vnet = {'name': 'wireguard-shared-vnet', 'subnets': [{'id': 'mock-subnet-id'}]}
+            self._shared_nsg = {'id': 'mock-nsg-id'}
+            return self._shared_vnet, self._shared_nsg
+        
+        try:
+            # Shared resource names
+            shared_vnet_name = 'wireguard-shared-vnet'
+            shared_nsg_name = 'wireguard-shared-nsg'
+            
+            # Check if NSG exists
+            try:
+                nsg = self.network_client.network_security_groups.get(
+                    self.resource_group,
+                    shared_nsg_name
+                )
+                logger.info(f"Using existing shared NSG: {shared_nsg_name}")
+                self._shared_nsg = nsg
+            except Exception:
+                # Create NSG
+                logger.info(f"Creating shared NSG: {shared_nsg_name}")
+                nsg_params = {
+                    'location': location,
+                    'security_rules': [
+                        {
+                            'name': 'AllowWireGuard',
+                            'protocol': 'Udp',
+                            'source_port_range': '*',
+                            'destination_port_range': '51820',
+                            'source_address_prefix': '*',
+                            'destination_address_prefix': '*',
+                            'access': 'Allow',
+                            'priority': 100,
+                            'direction': 'Inbound'
+                        },
+                        {
+                            'name': 'AllowSSHFromFunctions',
+                            'protocol': 'Tcp',
+                            'source_port_range': '*',
+                            'destination_port_range': '22',
+                            'source_address_prefixes': [
+                                '20.38.64.0/19',
+                                '20.39.0.0/16', 
+                                '20.40.0.0/13',
+                                '20.48.0.0/12',
+                                '20.64.0.0/10'
+                            ],
+                            'destination_address_prefix': '*',
+                            'access': 'Allow',
+                            'priority': 110,
+                            'direction': 'Inbound'
+                        }
+                    ]
+                }
+                
+                nsg_poller = self.network_client.network_security_groups.begin_create_or_update(
+                    self.resource_group,
+                    shared_nsg_name,
+                    nsg_params
+                )
+                self._shared_nsg = nsg_poller.result()
+                logger.info(f"Created shared NSG: {shared_nsg_name}")
+            
+            # Check if VNet exists
+            try:
+                vnet = self.network_client.virtual_networks.get(
+                    self.resource_group,
+                    shared_vnet_name
+                )
+                logger.info(f"Using existing shared VNet: {shared_vnet_name}")
+                self._shared_vnet = vnet
+            except Exception:
+                # Create VNet
+                logger.info(f"Creating shared VNet: {shared_vnet_name}")
+                vnet_params = {
+                    'location': location,
+                    'address_space': {
+                        'address_prefixes': ['10.0.0.0/16']
+                    },
+                    'subnets': [{
+                        'name': 'default',
+                        'address_prefix': '10.0.0.0/24',
+                        'network_security_group': {'id': self._shared_nsg.id}
+                    }]
+                }
+                
+                vnet_poller = self.network_client.virtual_networks.begin_create_or_update(
+                    self.resource_group,
+                    shared_vnet_name,
+                    vnet_params
+                )
+                self._shared_vnet = vnet_poller.result()
+                logger.info(f"Created shared VNet: {shared_vnet_name}")
+            
+            return self._shared_vnet, self._shared_nsg
+            
+        except Exception as e:
+            logger.error(f"Error creating/getting shared network resources: {str(e)}", exc_info=True)
+            raise
+    
+    def get_or_create_vm(self, location: str = None, admin_username: str = 'azureuser') -> Tuple[bool, Optional[str], Optional[Dict]]:
         """
         Get existing running WireGuard VM or create a new one (idempotent operation).
         Only one VM exists at a time - returns existing VM if running, creates new one otherwise.
         Returns: (success, error_message, operation_data)
         """
+        # Use resource group location if not specified
+        if location is None:
+            location = self._get_resource_group_location()
+        
         if is_dry_run():
             logger.info(f"DRY RUN: Would get or create VM")
             # In dry run, initialize operation and return as "accepted"
@@ -170,7 +308,7 @@ class VMProvisioner:
             logger.error(f"Error in get_or_create_vm: {str(e)}", exc_info=True)
             return False, f"Failed to get or create VM: {str(e)}", None
     
-    def create_vm(self, location: str = 'eastus', admin_username: str = 'azureuser') -> Tuple[bool, Optional[str], Optional[Dict]]:
+    def create_vm(self, location: str = None, admin_username: str = 'azureuser') -> Tuple[bool, Optional[str], Optional[Dict]]:
         """
         Create a new VM for WireGuard asynchronously.
         Returns immediately with operation details.
@@ -178,6 +316,10 @@ class VMProvisioner:
         
         Note: Use get_or_create_vm() for idempotent operations.
         """
+        # Use resource group location if not specified
+        if location is None:
+            location = self._get_resource_group_location()
+        
         # Generate unique VM name
         import time
         vm_name = f"wg-{int(time.time())}"
@@ -200,72 +342,14 @@ class VMProvisioner:
         try:
             logger.info(f"Starting async VM creation for {vm_name} in {location}")
             
-            # Create VNet, Public IP, NIC, and VM
-            vnet_name = f"{vm_name}-vnet"
-            subnet_name = "default"
+            # Get or create shared network resources (VNet and NSG)
+            shared_vnet, shared_nsg = self._get_or_create_shared_network_resources(location)
+            
+            # Create VM-specific resources (Public IP and NIC)
             public_ip_name = f"{vm_name}-ip"
             nic_name = f"{vm_name}-nic"
-            nsg_name = f"{vm_name}-nsg"
             
-            # Step 1: Create Network Security Group
-            nsg_params = {
-                'location': location,
-                'security_rules': [
-                    {
-                        'name': 'AllowWireGuard',
-                        'protocol': 'Udp',
-                        'source_port_range': '*',
-                        'destination_port_range': '51820',
-                        'source_address_prefix': '*',
-                        'destination_address_prefix': '*',
-                        'access': 'Allow',
-                        'priority': 100,
-                        'direction': 'Inbound'
-                    },
-                    {
-                        'name': 'AllowSSH',
-                        'protocol': 'Tcp',
-                        'source_port_range': '*',
-                        'destination_port_range': '22',
-                        'source_address_prefix': '*',
-                        'destination_address_prefix': '*',
-                        'access': 'Allow',
-                        'priority': 110,
-                        'direction': 'Inbound'
-                    }
-                ]
-            }
-            
-            logger.info(f"Creating NSG {nsg_name}")
-            nsg_poller = self.network_client.network_security_groups.begin_create_or_update(
-                self.resource_group,
-                nsg_name,
-                nsg_params
-            )
-            nsg_result = nsg_poller.result()
-            
-            # Step 2: Create Virtual Network
-            vnet_params = {
-                'location': location,
-                'address_space': {
-                    'address_prefixes': ['10.0.0.0/16']
-                },
-                'subnets': [{
-                    'name': subnet_name,
-                    'address_prefix': '10.0.0.0/24',
-                    'network_security_group': {'id': nsg_result.id}
-                }]
-            }
-            
-            logger.info(f"Creating VNet {vnet_name}")
-            vnet_poller = self.network_client.virtual_networks.begin_create_or_update(
-                self.resource_group,
-                vnet_name,
-                vnet_params
-            )
-            vnet_result = vnet_poller.result()
-            
-            # Step 3: Create Public IP
+            # Step 1: Create Public IP
             public_ip_params = {
                 'location': location,
                 'sku': {'name': 'Standard'},
@@ -280,15 +364,15 @@ class VMProvisioner:
             )
             public_ip_result = public_ip_poller.result()
             
-            # Step 4: Create Network Interface
+            # Step 2: Create Network Interface using shared VNet and NSG
             nic_params = {
                 'location': location,
                 'ip_configurations': [{
                     'name': 'ipconfig1',
-                    'subnet': {'id': vnet_result.subnets[0].id},
+                    'subnet': {'id': shared_vnet.subnets[0].id},
                     'public_ip_address': {'id': public_ip_result.id}
                 }],
-                'network_security_group': {'id': nsg_result.id}
+                'network_security_group': {'id': shared_nsg.id}
             }
             
             logger.info(f"Creating NIC {nic_name}")
@@ -301,12 +385,45 @@ class VMProvisioner:
             
             # Step 5: Start VM creation asynchronously
             # Use Flatcar Container Linux for faster Docker-based WireGuard deployment
-            # WireGuard setup happens during VM boot via cloud-init
+            # WireGuard setup happens via cloud-init during boot
             # Azure Run Command is used only to retrieve the generated config
-            
-            # Create cloud-init configuration that sets up WireGuard on first boot
+
+            # Create cloud-init configuration that sets up WireGuard during boot
             cloud_init_config = self._generate_cloud_init_config()
             
+            # Build os_profile supporting either SSH public key or admin password
+            ssh_pub_key = os.environ.get('SSH_PUBLIC_KEY')
+            admin_password = os.environ.get('AZURE_ADMIN_PASSWORD')
+
+            if not ssh_pub_key and not admin_password:
+                # Azure requires either SSH key or password enabled for Linux VMs
+                return False, "Missing SSH_PUBLIC_KEY or AZURE_ADMIN_PASSWORD for Linux VM authentication", None
+
+            os_profile = {
+                'computer_name': vm_name,
+                'admin_username': admin_username,
+            }
+
+            # If admin password provided, enable password auth
+            if admin_password:
+                os_profile['admin_password'] = admin_password
+                linux_configuration = {
+                    'disable_password_authentication': False
+                }
+            else:
+                # Use SSH public key
+                linux_configuration = {
+                    'disable_password_authentication': True,
+                    'ssh': {
+                        'public_keys': [
+                            {
+                                'path': f"/home/{admin_username}/.ssh/authorized_keys",
+                                'key_data': ssh_pub_key
+                            }
+                        ]
+                    }
+                }
+
             vm_params = {
                 'location': location,
                 'hardware_profile': {
@@ -327,14 +444,12 @@ class VMProvisioner:
                         }
                     }
                 },
-                'os_profile': {
-                    'computer_name': vm_name,
-                    'admin_username': admin_username,
-                    'custom_data': base64.b64encode(cloud_init_config.encode()).decode(),
-                    'linux_configuration': {
-                        'disable_password_authentication': True
-                    }
+                'plan': {
+                    'publisher': 'kinvolk',
+                    'product': 'flatcar-container-linux-free',
+                    'name': 'stable'
                 },
+                'os_profile': os_profile,
                 'network_profile': {
                     'network_interfaces': [{
                         'id': nic_result.id
@@ -346,6 +461,12 @@ class VMProvisioner:
                     'created-by': 'wireguard-spa'
                 }
             }
+
+            # Add cloud-init config as customData for Flatcar Linux
+            if cloud_init_config:
+                vm_params['os_profile']['customData'] = base64.b64encode(
+                    cloud_init_config.encode('utf-8')
+                ).decode('utf-8')
             
             logger.info(f"Starting async VM creation for {vm_name}")
             # Start the operation but don't wait for it to complete
@@ -420,7 +541,8 @@ class VMProvisioner:
                     except Exception:
                         ip_address = None
                     
-                    # Retrieve the WireGuard config that was generated during VM boot
+                    # VM is ready, WireGuard should be set up via Ignition systemd service
+                    # Use Run Command to retrieve the generated client config
                     logger.info(f"VM {vm_name} is ready, retrieving WireGuard config via Run Command")
                     conf_text = self._retrieve_wireguard_config_via_run_command(vm_name)
                     
@@ -433,13 +555,13 @@ class VMProvisioner:
                             'confText': conf_text
                         }
                     else:
-                        # Run Command failed or didn't return config
-                        logger.warning(f"WireGuard setup incomplete for VM {vm_name}, returning sample config")
+                        # Setup failed
+                        logger.error(f"WireGuard setup failed for VM {vm_name}")
                         return True, None, {
                             'vmName': vm_name,
-                            'status': 'Succeeded',
-                            'publicIp': ip_address,
-                            'confText': self._get_sample_config(ip_address) if ip_address else None
+                            'status': 'Failed',
+                            'error': 'WireGuard setup failed',
+                            'publicIp': ip_address
                         }
                 elif provisioning_state in ['Creating', 'Updating']:
                     return True, None, {
@@ -504,11 +626,9 @@ class VMProvisioner:
                 vm_name
             ).result()
             
-            # Delete associated resources
+            # Delete VM-specific resources (keep shared VNet and NSG)
             nic_name = f"{vm_name}-nic"
             public_ip_name = f"{vm_name}-ip"
-            vnet_name = f"{vm_name}-vnet"
-            nsg_name = f"{vm_name}-nsg"
             
             # Delete NIC
             try:
@@ -516,6 +636,7 @@ class VMProvisioner:
                     self.resource_group,
                     nic_name
                 ).result()
+                logger.info(f"Deleted NIC {nic_name}")
             except Exception as e:
                 logger.warning(f"Could not delete NIC {nic_name}: {e}")
             
@@ -525,65 +646,16 @@ class VMProvisioner:
                     self.resource_group,
                     public_ip_name
                 ).result()
+                logger.info(f"Deleted Public IP {public_ip_name}")
             except Exception as e:
                 logger.warning(f"Could not delete Public IP {public_ip_name}: {e}")
             
-            # Delete NSG
-            try:
-                self.network_client.network_security_groups.begin_delete(
-                    self.resource_group,
-                    nsg_name
-                ).result()
-            except Exception as e:
-                logger.warning(f"Could not delete NSG {nsg_name}: {e}")
-            
-            # Delete VNet
-            try:
-                self.network_client.virtual_networks.begin_delete(
-                    self.resource_group,
-                    vnet_name
-                ).result()
-            except Exception as e:
-                logger.warning(f"Could not delete VNet {vnet_name}: {e}")
-            
-            logger.info(f"VM {vm_name} and associated resources deleted successfully")
+            logger.info(f"VM {vm_name} and VM-specific resources deleted successfully (shared network resources preserved)")
             return True, None
             
         except Exception as e:
             logger.error(f"Error deleting VM {vm_name}: {str(e)}", exc_info=True)
             return False, f"Failed to delete VM: {str(e)}"
-    
-    def _generate_cloud_init_config(self) -> str:
-        """
-        Generate cloud-init configuration that sets up WireGuard on VM boot.
-        The script generates keys, starts the Docker container, and saves the client config.
-        """
-        # Read the setup script
-        script_path = os.path.join(os.path.dirname(__file__), 'wireguard_docker_setup.sh')
-        try:
-            with open(script_path, 'r') as f:
-                setup_script = f.read()
-        except Exception as e:
-            logger.error(f"Failed to read setup script: {str(e)}")
-            # Fallback to inline script
-            setup_script = """#!/bin/bash
-set -e
-# Generate keys and start WireGuard container
-echo "WireGuard setup will be configured via Run Command"
-"""
-        
-        # Create cloud-init config that runs the setup script on boot
-        cloud_init = f"""#cloud-config
-write_files:
-  - path: /opt/wireguard-setup.sh
-    permissions: '0755'
-    content: |
-{chr(10).join('      ' + line for line in setup_script.split(chr(10)))}
-
-runcmd:
-  - /opt/wireguard-setup.sh > /var/log/wireguard-setup.log 2>&1
-"""
-        return cloud_init
     
     def _retrieve_wireguard_config_via_run_command(self, vm_name: str) -> Optional[str]:
         """
@@ -597,8 +669,8 @@ runcmd:
             # Simple script to read the generated config
             retrieve_script = """#!/bin/bash
 # Read the client config that was generated during boot
-if [ -f /etc/wireguard/client.conf ]; then
-    cat /etc/wireguard/client.conf
+if [ -f /root/client.conf ]; then
+    cat /root/client.conf
 else
     echo "ERROR: Client config not found. Setup may still be in progress."
     exit 1
@@ -608,7 +680,7 @@ fi
             # Execute Run Command
             run_command_params = {
                 'command_id': 'RunShellScript',
-                'script': [retrieve_script]
+                'script': retrieve_script.split('\n')
             }
             
             logger.info(f"Starting Run Command on VM {vm_name}")
@@ -643,6 +715,82 @@ fi
                 
         except Exception as e:
             logger.error(f"Error executing Run Command on VM {vm_name}: {str(e)}", exc_info=True)
+            return None
+    
+    def _setup_wireguard_via_ssh(self, vm_name: str, ip_address: str) -> Optional[str]:
+        """
+        Setup WireGuard on VM via SSH and retrieve the client config.
+        Executes the wireguard setup script on the VM and returns the generated client configuration.
+        Returns the WireGuard client configuration or None if setup fails.
+        """
+        try:
+            logger.info(f"Connecting via SSH to {ip_address} to setup WireGuard")
+            
+            # Get SSH key from environment
+            ssh_private_key_b64 = os.environ.get('SSH_PRIVATE_KEY')
+            if not ssh_private_key_b64:
+                logger.error("SSH_PRIVATE_KEY environment variable not set")
+                return None
+            
+            # Decode the base64 private key
+            try:
+                ssh_private_key = base64.b64decode(ssh_private_key_b64).decode('utf-8')
+            except Exception as e:
+                logger.error(f"Failed to decode SSH private key: {str(e)}")
+                return None
+            
+            # Create SSH client
+            ssh = paramiko.SSHClient()
+            ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+            
+            # Load private key
+            private_key = paramiko.RSAKey.from_private_key(io.StringIO(ssh_private_key))
+            
+            # Connect to VM
+            logger.info(f"SSH connecting to azureuser@{ip_address}")
+            ssh.connect(
+                hostname=ip_address,
+                username='azureuser',
+                pkey=private_key,
+                timeout=30
+            )
+            
+            # Execute the WireGuard setup script
+            setup_script_path = os.path.join(os.path.dirname(__file__), 'wireguard_docker_setup.sh')
+            with open(setup_script_path, 'r') as f:
+                setup_script = f.read()
+            
+            # Execute setup script
+            logger.info("Running WireGuard setup script via SSH")
+            stdin, stdout, stderr = ssh.exec_command(setup_script)
+            
+            # Read output
+            output = stdout.read().decode('utf-8')
+            error_output = stderr.read().decode('utf-8')
+            
+            # Close connection
+            ssh.close()
+            
+            if error_output:
+                logger.warning(f"SSH setup script produced stderr: {error_output}")
+            
+            if output:
+                logger.info(f"WireGuard setup completed via SSH")
+                
+                # Extract WireGuard config from output
+                conf_text = self._extract_wireguard_config(output)
+                
+                if conf_text:
+                    return conf_text
+                else:
+                    logger.warning("Could not extract WireGuard config from SSH setup output")
+                    return None
+            else:
+                logger.error("SSH setup script returned no output")
+                return None
+                
+        except Exception as e:
+            logger.error(f"Error setting up WireGuard via SSH on VM {vm_name}: {str(e)}", exc_info=True)
             return None
     
     def _extract_wireguard_config(self, output: str) -> Optional[str]:
@@ -689,6 +837,34 @@ Endpoint = {public_ip}:51820
 AllowedIPs = 0.0.0.0/0, ::/0
 PersistentKeepalive = 25
 """
+
+    def _generate_ignition_config(self) -> str:
+        """
+        Generate Ignition configuration for Flatcar Linux.
+        Creates a systemd service that runs after network is online to set up WireGuard.
+        Returns the Ignition JSON configuration as a string.
+        """
+        try:
+            ignition_file = os.path.join(os.path.dirname(__file__), '..', 'wireguard-ignition.json')
+            with open(ignition_file, 'r') as f:
+                return f.read()
+        except Exception as e:
+            logger.error(f"Error reading Ignition config: {str(e)}")
+            return None
+    
+    def _generate_cloud_init_config(self) -> str:
+        """
+        Generate cloud-init configuration for Flatcar Linux.
+        Creates a cloud-init config that sets up WireGuard during boot.
+        Returns the cloud-init YAML configuration as a string.
+        """
+        try:
+            cloud_init_file = os.path.join(os.path.dirname(__file__), 'wireguard-cloud-init.yaml')
+            with open(cloud_init_file, 'r') as f:
+                return f.read()
+        except Exception as e:
+            logger.error(f"Error reading cloud-init config: {str(e)}")
+            return None
 
 
 # Singleton instance

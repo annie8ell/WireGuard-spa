@@ -1,0 +1,26 @@
+{
+  "ignition": {
+    "version": "3.3.0"
+  },
+  "storage": {
+    "files": [
+      {
+        "path": "/opt/wireguard-setup.sh",
+        "contents": {
+          "compression": "gzip",
+          "source": "data:;base64,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"
+        },
+        "mode": 493
+      }
+    ]
+  },
+  "systemd": {
+    "units": [
+      {
+        "contents": "[Unit]\nDescription=WireGuard VPN Setup\nAfter=network-online.target docker.service\nWants=network-online.target\nRequires=docker.service\n\n[Service]\nType=oneshot\nExecStart=/opt/wireguard-setup.sh\nRemainAfterExit=yes\nStandardOutput=journal\nStandardError=journal\n\n[Install]\nWantedBy=multi-user.target\n",
+        "enabled": true,
+        "name": "wireguard-setup.service"
+      }
+    ]
+  }
+}
