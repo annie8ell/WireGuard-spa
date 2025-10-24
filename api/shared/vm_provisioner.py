@@ -1,7 +1,7 @@
 """
 Azure VM provisioning for WireGuard using Service Principal credentials.
 Adapted for Azure Static Web Apps Functions (no Managed Identity support).
-Uses Docker-based WireGuard deployment on Flatcar Container Linux.
+Uses Docker-based WireGuard deployment on Ubuntu 22.04 LTS with cloud-init.
 """
 import logging
 import os
@@ -9,9 +9,6 @@ import time
 import base64
 import json
 import re
-import io
-import textwrap
-import paramiko
 from azure.identity import ClientSecretCredential
 from azure.mgmt.compute import ComputeManagementClient
 from azure.mgmt.network import NetworkManagementClient
@@ -719,82 +716,6 @@ fi
                 
         except Exception as e:
             logger.error(f"Error executing Run Command on VM {vm_name}: {str(e)}", exc_info=True)
-            return None
-    
-    def _setup_wireguard_via_ssh(self, vm_name: str, ip_address: str) -> Optional[str]:
-        """
-        Setup WireGuard on VM via SSH and retrieve the client config.
-        Executes the wireguard setup script on the VM and returns the generated client configuration.
-        Returns the WireGuard client configuration or None if setup fails.
-        """
-        try:
-            logger.info(f"Connecting via SSH to {ip_address} to setup WireGuard")
-            
-            # Get SSH key from environment
-            ssh_private_key_b64 = os.environ.get('SSH_PRIVATE_KEY')
-            if not ssh_private_key_b64:
-                logger.error("SSH_PRIVATE_KEY environment variable not set")
-                return None
-            
-            # Decode the base64 private key
-            try:
-                ssh_private_key = base64.b64decode(ssh_private_key_b64).decode('utf-8')
-            except Exception as e:
-                logger.error(f"Failed to decode SSH private key: {str(e)}")
-                return None
-            
-            # Create SSH client
-            ssh = paramiko.SSHClient()
-            ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-            
-            # Load private key
-            private_key = paramiko.RSAKey.from_private_key(io.StringIO(ssh_private_key))
-            
-            # Connect to VM
-            logger.info(f"SSH connecting to azureuser@{ip_address}")
-            ssh.connect(
-                hostname=ip_address,
-                username='azureuser',
-                pkey=private_key,
-                timeout=30
-            )
-            
-            # Execute the WireGuard setup script
-            setup_script_path = os.path.join(os.path.dirname(__file__), 'wireguard_docker_setup.sh')
-            with open(setup_script_path, 'r') as f:
-                setup_script = f.read()
-            
-            # Execute setup script
-            logger.info("Running WireGuard setup script via SSH")
-            stdin, stdout, stderr = ssh.exec_command(setup_script)
-            
-            # Read output
-            output = stdout.read().decode('utf-8')
-            error_output = stderr.read().decode('utf-8')
-            
-            # Close connection
-            ssh.close()
-            
-            if error_output:
-                logger.warning(f"SSH setup script produced stderr: {error_output}")
-            
-            if output:
-                logger.info(f"WireGuard setup completed via SSH")
-                
-                # Extract WireGuard config from output
-                conf_text = self._extract_wireguard_config(output)
-                
-                if conf_text:
-                    return conf_text
-                else:
-                    logger.warning("Could not extract WireGuard config from SSH setup output")
-                    return None
-            else:
-                logger.error("SSH setup script returned no output")
-                return None
-                
-        except Exception as e:
-            logger.error(f"Error setting up WireGuard via SSH on VM {vm_name}: {str(e)}", exc_info=True)
             return None
     
     def _extract_wireguard_config(self, output: str) -> Optional[str]:

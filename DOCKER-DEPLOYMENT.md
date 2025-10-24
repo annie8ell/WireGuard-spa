@@ -4,7 +4,7 @@ This document describes the implementation of Docker-based WireGuard deployment 
 
 ## Overview
 
-The system now uses **Flatcar Container Linux** to provision WireGuard VPN servers in Docker containers, replacing the previous Ubuntu-based approach. This provides faster VM startup times, stateless key generation, and a more modern container-first architecture.
+The system uses **Ubuntu 22.04 LTS** to provision WireGuard VPN servers in Docker containers. Ubuntu was chosen over Flatcar Container Linux due to better Azure cloud-init compatibility and reliable VM provisioning. This provides stateless key generation and full automation with Docker containerization.
 
 ## Architecture
 
@@ -13,23 +13,25 @@ The system now uses **Flatcar Container Linux** to provision WireGuard VPN serve
 ```
 1. User requests VPN via frontend
    ↓
-2. API creates Flatcar Container Linux VM (Standard_B1ls)
-   - Publisher: kinvolk
-   - Offer: flatcar-container-linux-free
-   - SKU: stable
+2. API creates Ubuntu 22.04 LTS VM (Standard_B1ls)
+   - Publisher: Canonical
+   - Offer: 0001-com-ubuntu-server-jammy
+   - SKU: 22_04-lts-gen2
+   - Custom Data: cloud-init config with WireGuard setup script
    ↓
-3. VM boots with Docker pre-installed
-   ↓
-4. When VM status = 'Succeeded', API executes Run Command
-   ↓
-5. Run Command script (wireguard_docker_setup.sh):
+3. VM boots and cloud-init runs wireguard_docker_setup.sh:
+   - Installs Docker (via cloud-init packages)
    - Generates random WireGuard keys using Docker containers
    - Creates server configuration
    - Pulls linuxserver/wireguard Docker image
    - Starts WireGuard container with proper networking
-   - Outputs client configuration to stdout
+   - Saves client configuration to /etc/wireguard/client.conf
    ↓
-6. API extracts client config from Run Command output
+4. When VM status = 'Succeeded', API uses Run Command to retrieve config
+   ↓
+5. Run Command reads /etc/wireguard/client.conf
+   ↓
+6. API extracts client config and replaces IP placeholder with actual public IP
    ↓
 7. Frontend receives config and displays download button
    ↓
@@ -41,24 +43,36 @@ The system now uses **Flatcar Container Linux** to provision WireGuard VPN serve
 ### 1. VM Provisioner (`api/shared/vm_provisioner.py`)
 
 **Changes:**
-- Updated `create_vm()` to use Flatcar Container Linux image
-- Modified `get_vm_status()` to execute Run Command when VM is ready
-- Added `_setup_wireguard_via_run_command()` to execute setup script
+- Updated `create_vm()` to use Ubuntu 22.04 LTS image
+- Modified `get_vm_status()` to use Run Command to retrieve generated config
+- Added `_generate_cloud_init_config()` to embed setup script in VM custom_data
+- Added `_retrieve_wireguard_config_via_run_command()` to read config file
 - Added `_extract_wireguard_config()` to parse Run Command output
+- Added IP placeholder replacement logic to ensure correct endpoint
 
 **Image Configuration:**
 ```python
 'image_reference': {
-    'publisher': 'kinvolk',
-    'offer': 'flatcar-container-linux-free',
-    'sku': 'stable',
+    'publisher': 'Canonical',
+    'offer': '0001-com-ubuntu-server-jammy',
+    'sku': '22_04-lts-gen2',
     'version': 'latest'
 }
 ```
 
-### 2. WireGuard Setup Script (`api/shared/wireguard_docker_setup.sh`)
+### 2. SSH Key Requirement
 
-**Purpose:** Executed via Azure Run Command to set up WireGuard on the VM.
+**Note:** Azure requires Linux VMs to have either SSH public key or admin password for authentication. The implementation uses `SSH_PUBLIC_KEY` environment variable (stored in Azure Static Web App settings) to satisfy this requirement.
+
+**Important:** The SSH key is ONLY used for Azure's VM provisioning requirement. The actual WireGuard setup and config retrieval use:
+- **Cloud-init** for setup during VM boot
+- **Azure Run Command** (via VM Agent) for config retrieval
+
+No SSH connections are made by the application code - all automation happens through Azure's native mechanisms.
+
+### 3. WireGuard Setup Script (`api/shared/wireguard_docker_setup.sh`)
+
+**Purpose:** Embedded in VM's cloud-init custom_data and executed during first boot.
 
 **Key Steps:**
 1. Get server's public IP from Azure metadata service
