@@ -1,7 +1,7 @@
 #!/bin/bash
-# WireGuard Docker Setup Script
+# WireGuard Direct Setup Script
 # This script is executed during VM boot via cloud-init
-# It sets up WireGuard in a Docker container and saves the client configuration
+# It sets up WireGuard directly on the host and saves the client configuration
 
 set -e
 
@@ -11,6 +11,58 @@ SERVER_NETWORK="10.13.13.0/24"
 SERVER_ADDRESS="10.13.13.1"
 CLIENT_ADDRESS="10.13.13.2"
 DNS_SERVER="1.1.1.1"
+
+# Install WireGuard tools
+echo "Installing WireGuard tools..."
+if command -v apt >/dev/null 2>&1; then
+    # Ubuntu/Debian
+    echo "Detected apt package manager"
+    if apt update 2>/dev/null; then
+        echo "Package list updated successfully"
+        if apt install -y wireguard wireguard-tools 2>/dev/null; then
+            echo "WireGuard tools installed successfully"
+        else
+            echo "ERROR: Failed to install wireguard-tools package"
+            exit 1
+        fi
+    else
+        echo "ERROR: Failed to update package list (may need sudo in test environment)"
+        # For testing purposes, check if wg command already exists
+        if command -v wg >/dev/null 2>&1; then
+            echo "WireGuard tools already available, continuing..."
+        else
+            echo "ERROR: WireGuard tools not available and cannot install"
+            exit 1
+        fi
+    fi
+elif command -v tdnf >/dev/null 2>&1; then
+    # CBL-Mariner - try installing from source as fallback
+    echo "Installing WireGuard on CBL-Mariner..."
+    cd /tmp
+    curl -sL https://github.com/WireGuard/wireguard-tools/archive/refs/tags/v1.0.20210914.tar.gz | tar xz 2>/dev/null
+    cd wireguard-tools-*
+    if [ -f Makefile ]; then
+        make && make install >/dev/null 2>&1
+    else
+        echo "Source installation failed, WireGuard tools not available"
+        exit 1
+    fi
+else
+    echo "ERROR: Unsupported package manager"
+    exit 1
+fi
+
+# Check if wg command is available
+if ! command -v wg >/dev/null 2>&1; then
+    echo "ERROR: WireGuard tools not installed successfully"
+    exit 1
+fi
+
+# Enable IP forwarding
+echo "Enabling IP forwarding..."
+echo 1 > /proc/sys/net/ipv4/ip_forward
+echo "net.ipv4.ip_forward=1" >> /etc/sysctl.conf
+sysctl -p >/dev/null 2>&1
 
 # Get server's public IP - use ifconfig.me as primary method
 echo "Getting server public IP..."
@@ -51,21 +103,21 @@ fi
 
 echo "Final SERVER_IP: '$SERVER_IP'"
 
-# Generate keys using a temporary container with wireguard-tools
+# Generate keys directly using wg command
 echo "Generating WireGuard keys..."
-PRIVATE_KEY=$(docker run --rm alpine:latest sh -c "apk add --no-cache wireguard-tools >/dev/null 2>&1 && wg genkey" 2>/dev/null)
-PUBLIC_KEY=$(docker run --rm alpine:latest sh -c "apk add --no-cache wireguard-tools >/dev/null 2>&1 && echo '$PRIVATE_KEY' | wg pubkey" 2>/dev/null)
+SERVER_PRIVATE_KEY=$(wg genkey)
+SERVER_PUBLIC_KEY=$(echo "$SERVER_PRIVATE_KEY" | wg pubkey)
 
-CLIENT_PRIVATE_KEY=$(docker run --rm alpine:latest sh -c "apk add --no-cache wireguard-tools >/dev/null 2>&1 && wg genkey" 2>/dev/null)
-CLIENT_PUBLIC_KEY=$(docker run --rm alpine:latest sh -c "apk add --no-cache wireguard-tools >/dev/null 2>&1 && echo '$CLIENT_PRIVATE_KEY' | wg pubkey" 2>/dev/null)
+CLIENT_PRIVATE_KEY=$(wg genkey)
+CLIENT_PUBLIC_KEY=$(echo "$CLIENT_PRIVATE_KEY" | wg pubkey)
 
-# Create WireGuard config directory on host
+# Create WireGuard config directory
 mkdir -p /etc/wireguard
 
 # Create server configuration
 cat > /etc/wireguard/wg0.conf <<EOF
 [Interface]
-PrivateKey = ${PRIVATE_KEY}
+PrivateKey = ${SERVER_PRIVATE_KEY}
 Address = ${SERVER_ADDRESS}/24
 ListenPort = ${SERVER_PORT}
 PostUp = iptables -A FORWARD -i %i -j ACCEPT; iptables -A FORWARD -o %i -j ACCEPT; iptables -t nat -A POSTROUTING -o eth0 -j MASQUERADE
@@ -85,7 +137,7 @@ Address = ${CLIENT_ADDRESS}/24
 DNS = ${DNS_SERVER}
 
 [Peer]
-PublicKey = ${PUBLIC_KEY}
+PublicKey = ${SERVER_PUBLIC_KEY}
 Endpoint = ${SERVER_IP}:${SERVER_PORT}
 AllowedIPs = 0.0.0.0/0, ::/0
 PersistentKeepalive = 25
@@ -94,40 +146,27 @@ EOF
 
 echo "Client config saved to /etc/wireguard/client.conf"
 
-echo "Pulling WireGuard Docker image..."
-docker pull linuxserver/wireguard:latest >/dev/null 2>&1
+# Set proper permissions
+chmod 600 /etc/wireguard/wg0.conf
+chmod 644 /etc/wireguard/client.conf
 
-# Stop and remove any existing container
-docker stop wireguard 2>/dev/null || true
-docker rm wireguard 2>/dev/null || true
+# Start WireGuard interface
+echo "Starting WireGuard interface..."
+wg-quick up wg0
 
-echo "Starting WireGuard container..."
-# Start WireGuard container
-docker run -d \
-  --name=wireguard \
-  --cap-add=NET_ADMIN \
-  --cap-add=SYS_MODULE \
-  --sysctl="net.ipv4.conf.all.src_valid_mark=1" \
-  -e PUID=1000 \
-  -e PGID=1000 \
-  -e TZ=Etc/UTC \
-  -p ${SERVER_PORT}:${SERVER_PORT}/udp \
-  -v /etc/wireguard:/config \
-  -v /lib/modules:/lib/modules:ro \
-  --restart unless-stopped \
-  linuxserver/wireguard >/dev/null 2>&1
+# Enable WireGuard to start on boot
+if command -v systemctl >/dev/null 2>&1; then
+    systemctl enable wg-quick@wg0 >/dev/null 2>&1
+    systemctl start wg-quick@wg0 >/dev/null 2>&1
+fi
 
-# Wait for container to be ready
-sleep 10
-
-# Verify container is running
-if ! docker ps | grep -q wireguard; then
-    echo "ERROR: WireGuard container failed to start"
-    docker logs wireguard 2>&1 || true
+# Verify interface is up
+if ! wg show wg0 >/dev/null 2>&1; then
+    echo "ERROR: WireGuard interface failed to start"
     exit 1
 fi
 
-echo "WireGuard container started successfully"
+echo "WireGuard interface started successfully"
 echo "Server IP: ${SERVER_IP}"
 echo "Server Port: ${SERVER_PORT}"
 echo "Setup complete!"

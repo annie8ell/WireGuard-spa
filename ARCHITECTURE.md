@@ -245,31 +245,43 @@ VM Provisioner         Azure VM            Run Command         Docker Container
 
 ### 5. Auto-teardown Flow
 
-> **Note**: Auto-teardown after 30 minutes is implemented via VM tags. A separate cleanup process (not implemented in this codebase) can query for VMs with `auto-delete: true` tags older than 30 minutes and delete them.
+**Auto-shutdown is now implemented programmatically** using Azure DevTest Lab schedules. Each VM is configured with an auto-shutdown schedule during creation that shuts down the VM after 30 minutes.
 
 ```
-Cleanup Process (External)
+VM Creation Flow (Updated)
   │
-  ├─ Query VMs with auto-delete tag
+  ├─ Create VM resources (NIC, Public IP, VM)
   │
-  ├─ Check creation timestamp
+  ├─ Configure auto-shutdown schedule
+  │  • Creates Microsoft.DevTestLab/schedules resource
+  │  • Sets shutdown time to 30 minutes from creation
+  │  • Targets the specific VM
   │
-  ├─ If > 30 minutes old:
+  ├─ VM starts and WireGuard configures
+  │
+  └─ VM automatically shuts down after 30 minutes
+```
+
+**Restart Flow (for stopped VMs):**
+```
+User Request
+  │
+  ├─ Check for existing WireGuard VM
+  │
+  ├─ If VM exists but is stopped:
   │  │
-  │  ├─ Delete VM
-  │  ├─ Delete NIC
-  │  ├─ Delete Public IP
-  │  ├─ Delete VNet
-  │  └─ Delete NSG
+  │  ├─ Start the VM
+  │  ├─ Return existing WireGuard config
+  │  └─ (Same config preserved across sessions)
   │
-  └─ Cleanup complete
+  └─ User gets same VPN connection
 ```
 
-Potential implementation options:
-- Azure Automation runbook (scheduled every 5-10 minutes)
-- Azure Logic App with recurrence trigger
-- Separate Azure Function with timer trigger
-- External cron job using Azure CLI
+**Benefits:**
+- ✅ **Preserves WireGuard config** across sessions
+- ✅ **Cost-effective** (only compute costs when in use)
+- ✅ **Automatic cleanup** (no manual intervention needed)
+- ✅ **Simple implementation** (uses Azure built-in features)
 
 ## Security Architecture
 
@@ -480,12 +492,13 @@ Upstream costs                          Varies by provider
 
 ### Cost Control Strategies
 
-1. **Free SWA Tier**: Sufficient for most use cases
-2. **Serverless Functions**: Pay per request, not per hour
-3. **In-memory Store**: No external storage costs (can upgrade later)
-4. **DRY_RUN Mode**: Test without provisioning resources
-5. **Short Sessions**: Upstream provider manages VM lifetime
-6. **Efficient Polling**: Balance freshness vs. API costs
+1. **Auto-shutdown after 30 minutes**: VMs automatically shut down via Azure schedules, stopping compute costs
+2. **Restart capability**: Stopped VMs can be restarted with preserved WireGuard config
+3. **Free SWA Tier**: Sufficient for most use cases
+4. **Serverless Functions**: Pay per request, not per hour
+5. **In-memory Store**: No external storage costs (can upgrade later)
+6. **DRY_RUN Mode**: Test without provisioning resources
+7. **Short Sessions**: VMs shut down automatically after 30 minutes
 
 ## Future Architecture Enhancements
 
@@ -524,20 +537,24 @@ Upstream costs                          Varies by provider
 
 ## Key Design Decisions
 
-### Why SWA Functions instead of Durable Functions?
+### Why Auto-Shutdown + Restart instead of Deletion?
 
 **Benefits:**
-- ✅ Simpler architecture (single resource)
-- ✅ Lower cost (no separate Function App or Storage)
-- ✅ Easier deployment (single workflow)
-- ✅ Better integration (frontend + API in one resource)
-- ✅ Standard REST pattern (202 Accepted)
+- ✅ **Preserves WireGuard config** across sessions (users get same connection)
+- ✅ **Cost-effective** (deallocated VMs only incur storage costs ~$0.05/month)
+- ✅ **Simple implementation** (uses Azure built-in DevTest Lab schedules)
+- ✅ **Reliable cleanup** (Azure handles the scheduling)
+- ✅ **Better UX** (users can reconnect to same VPN without re-setup)
 
 **Trade-offs:**
-- ⚠️ No built-in state management (must implement)
-- ⚠️ No durable timers (delegate to upstream)
-- ⚠️ Polling required (can add webhooks later)
-- ⚠️ Shorter timeout limits (can work around with async pattern)
+- ⚠️ **Storage costs** (minimal - ~$0.05/month per VM disk)
+- ⚠️ **Resource accumulation** (VMs persist but stopped)
+- ⚠️ **Manual cleanup still needed** (for long-term resource management)
+
+**Upgrade Path:**
+- Add periodic cleanup job to delete old stopped VMs
+- Implement usage-based cleanup (delete after X days stopped)
+- Add admin interface for manual VM management
 
 ### Why In-memory Status Store?
 

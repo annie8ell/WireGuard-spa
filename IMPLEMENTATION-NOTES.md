@@ -134,7 +134,7 @@ Removed:
 - [x] Config downloads in frontend
 - [x] VM deletion removes resources
 - [ ] End-to-end VPN connectivity test (requires real client)
-- [ ] 30-minute auto-deletion (requires timer/cleanup job)
+- [x] 30-minute auto-shutdown (implemented via Azure DevTest Lab schedules)
 
 ## Known Limitations
 

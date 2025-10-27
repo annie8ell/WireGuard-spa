@@ -37,7 +37,7 @@ WireGuard requires kernel-level TUN/TAP device support which Azure Container Ins
 - ✅ **Docker-based WireGuard** - Uses Flatcar Container Linux and linuxserver/wireguard container
 - ✅ **Stateless key generation** - WireGuard keys generated on VM, not stored in API
 - ✅ **DRY_RUN mode** - Test without provisioning Azure resources
-- ✅ **Automatic teardown** - VMs automatically deleted after 30 minutes
+- **Automatic teardown** - VMs automatically shut down after 30 minutes via Azure auto-shutdown schedules
 - ✅ **Minimal cost** - Uses cheapest VM size (Standard_B1ls)
 - ✅ **Download config** - WireGuard configuration downloads as `.conf` file
 - ✅ **CI/CD ready** - GitHub Actions workflows included

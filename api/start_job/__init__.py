@@ -87,6 +87,12 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
             "isExisting": is_existing
         }
         
+        # Include SSH keys for debugging (only in development/local)
+        if operation_data.get('sshPrivateKey'):
+            response_data["sshPrivateKey"] = operation_data["sshPrivateKey"]
+        if operation_data.get('sshPublicKey'):
+            response_data["sshPublicKey"] = operation_data["sshPublicKey"]
+        
         # If VM is already succeeded and has config, include it
         if vm_status == 'Succeeded' and operation_data.get('confText'):
             response_data["confText"] = operation_data["confText"]

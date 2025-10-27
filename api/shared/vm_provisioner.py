@@ -1,7 +1,7 @@
 """
 Azure VM provisioning for WireGuard using Service Principal credentials.
 Adapted for Azure Static Web Apps Functions (no Managed Identity support).
-Uses Docker-based WireGuard deployment on Ubuntu 22.04 LTS with cloud-init.
+Uses Docker-based WireGuard deployment on Flatcar Container Linux.
 """
 import logging
 import os
@@ -9,6 +9,9 @@ import time
 import base64
 import json
 import re
+import io
+import textwrap
+import paramiko
 from azure.identity import ClientSecretCredential
 from azure.mgmt.compute import ComputeManagementClient
 from azure.mgmt.network import NetworkManagementClient
@@ -405,12 +408,12 @@ class VMProvisioner:
             # If admin password provided, enable password auth
             if admin_password:
                 os_profile['admin_password'] = admin_password
-                linux_configuration = {
+                os_profile['linux_configuration'] = {
                     'disable_password_authentication': False
                 }
             else:
                 # Use SSH public key
-                linux_configuration = {
+                os_profile['linux_configuration'] = {
                     'disable_password_authentication': True,
                     'ssh': {
                         'public_keys': [
@@ -429,8 +432,8 @@ class VMProvisioner:
                 },
                 'storage_profile': {
                     'image_reference': {
-                        # Ubuntu 22.04 LTS for reliable cloud-init support and Docker compatibility
-                        # This avoids Flatcar's Ignition provisioning issues on Azure
+                        # Ubuntu 22.04 LTS for reliable WireGuard support and direct installation
+                        # CBL-Mariner has WireGuard kernel module but no userspace tools in repos
                         'publisher': 'Canonical',
                         'offer': '0001-com-ubuntu-server-jammy',
                         'sku': '22_04-lts-gen2',
@@ -535,7 +538,7 @@ class VMProvisioner:
                     except Exception:
                         ip_address = None
                     
-                    # VM is ready, WireGuard should be set up via Ignition systemd service
+                    # VM is ready, WireGuard should be set up via cloud-init direct installation
                     # Use Run Command to retrieve the generated client config
                     logger.info(f"VM {vm_name} is ready, retrieving WireGuard config via Run Command")
                     conf_text = self._retrieve_wireguard_config_via_run_command(vm_name)
@@ -718,6 +721,82 @@ fi
             logger.error(f"Error executing Run Command on VM {vm_name}: {str(e)}", exc_info=True)
             return None
     
+    def _setup_wireguard_via_ssh(self, vm_name: str, ip_address: str) -> Optional[str]:
+        """
+        Setup WireGuard on VM via SSH and retrieve the client config.
+        Executes the wireguard setup script on the VM and returns the generated client configuration.
+        Returns the WireGuard client configuration or None if setup fails.
+        """
+        try:
+            logger.info(f"Connecting via SSH to {ip_address} to setup WireGuard")
+            
+            # Get SSH key from environment
+            ssh_private_key_b64 = os.environ.get('SSH_PRIVATE_KEY')
+            if not ssh_private_key_b64:
+                logger.error("SSH_PRIVATE_KEY environment variable not set")
+                return None
+            
+            # Decode the base64 private key
+            try:
+                ssh_private_key = base64.b64decode(ssh_private_key_b64).decode('utf-8')
+            except Exception as e:
+                logger.error(f"Failed to decode SSH private key: {str(e)}")
+                return None
+            
+            # Create SSH client
+            ssh = paramiko.SSHClient()
+            ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+            
+            # Load private key
+            private_key = paramiko.RSAKey.from_private_key(io.StringIO(ssh_private_key))
+            
+            # Connect to VM
+            logger.info(f"SSH connecting to azureuser@{ip_address}")
+            ssh.connect(
+                hostname=ip_address,
+                username='azureuser',
+                pkey=private_key,
+                timeout=30
+            )
+            
+            # Execute the WireGuard setup script
+            setup_script_path = os.path.join(os.path.dirname(__file__), 'wireguard_docker_setup.sh')
+            with open(setup_script_path, 'r') as f:
+                setup_script = f.read()
+            
+            # Execute setup script
+            logger.info("Running WireGuard setup script via SSH")
+            stdin, stdout, stderr = ssh.exec_command(setup_script)
+            
+            # Read output
+            output = stdout.read().decode('utf-8')
+            error_output = stderr.read().decode('utf-8')
+            
+            # Close connection
+            ssh.close()
+            
+            if error_output:
+                logger.warning(f"SSH setup script produced stderr: {error_output}")
+            
+            if output:
+                logger.info(f"WireGuard setup completed via SSH")
+                
+                # Extract WireGuard config from output
+                conf_text = self._extract_wireguard_config(output)
+                
+                if conf_text:
+                    return conf_text
+                else:
+                    logger.warning("Could not extract WireGuard config from SSH setup output")
+                    return None
+            else:
+                logger.error("SSH setup script returned no output")
+                return None
+                
+        except Exception as e:
+            logger.error(f"Error setting up WireGuard via SSH on VM {vm_name}: {str(e)}", exc_info=True)
+            return None
+    
     def _extract_wireguard_config(self, output: str) -> Optional[str]:
         """
         Extract WireGuard client configuration from Run Command output.
@@ -779,11 +858,9 @@ PersistentKeepalive = 25
     
     def _generate_cloud_init_config(self) -> str:
         """
-        Generate cloud-init configuration that writes and runs the WireGuard Docker setup script.
+        Generate cloud-init configuration that writes and runs the direct WireGuard setup script.
+        This installs WireGuard directly on the host instead of using containers.
         Returns the cloud-init YAML configuration as a string.
-        Notes:
-        - We embed the content of 'wireguard_docker_setup.sh' to keep a single source of truth.
-        - The script saves the client config at /etc/wireguard/client.conf with extractable markers.
         """
         try:
             script_path = os.path.join(os.path.dirname(__file__), 'wireguard_docker_setup.sh')
@@ -796,13 +873,13 @@ PersistentKeepalive = 25
             cloud_config = f"""#cloud-config
 
 write_files:
-  - path: /usr/local/bin/wireguard_docker_setup.sh
+  - path: /usr/local/bin/wireguard_direct_setup.sh
     permissions: '0755'
     content: |
 {indented_script}
 
 runcmd:
-  - [ bash, -c, "/usr/local/bin/wireguard_docker_setup.sh" ]
+  - [ bash, -c, "/usr/local/bin/wireguard_direct_setup.sh" ]
 """
             return cloud_config
         except Exception as e:
