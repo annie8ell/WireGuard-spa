@@ -408,12 +408,12 @@ class VMProvisioner:
             # If admin password provided, enable password auth
             if admin_password:
                 os_profile['admin_password'] = admin_password
-                os_profile['linux_configuration'] = {
+                linux_configuration = {
                     'disable_password_authentication': False
                 }
             else:
                 # Use SSH public key
-                os_profile['linux_configuration'] = {
+                linux_configuration = {
                     'disable_password_authentication': True,
                     'ssh': {
                         'public_keys': [
@@ -432,8 +432,8 @@ class VMProvisioner:
                 },
                 'storage_profile': {
                     'image_reference': {
-                        # Ubuntu 22.04 LTS for reliable WireGuard support and direct installation
-                        # CBL-Mariner has WireGuard kernel module but no userspace tools in repos
+                        # Ubuntu 22.04 LTS for reliable cloud-init support and Docker compatibility
+                        # This avoids Flatcar's Ignition provisioning issues on Azure
                         'publisher': 'Canonical',
                         'offer': '0001-com-ubuntu-server-jammy',
                         'sku': '22_04-lts-gen2',
@@ -538,7 +538,7 @@ class VMProvisioner:
                     except Exception:
                         ip_address = None
                     
-                    # VM is ready, WireGuard should be set up via cloud-init direct installation
+                    # VM is ready, WireGuard should be set up via Ignition systemd service
                     # Use Run Command to retrieve the generated client config
                     logger.info(f"VM {vm_name} is ready, retrieving WireGuard config via Run Command")
                     conf_text = self._retrieve_wireguard_config_via_run_command(vm_name)
@@ -858,9 +858,11 @@ PersistentKeepalive = 25
     
     def _generate_cloud_init_config(self) -> str:
         """
-        Generate cloud-init configuration that writes and runs the direct WireGuard setup script.
-        This installs WireGuard directly on the host instead of using containers.
+        Generate cloud-init configuration that writes and runs the WireGuard Docker setup script.
         Returns the cloud-init YAML configuration as a string.
+        Notes:
+        - We embed the content of 'wireguard_docker_setup.sh' to keep a single source of truth.
+        - The script saves the client config at /etc/wireguard/client.conf with extractable markers.
         """
         try:
             script_path = os.path.join(os.path.dirname(__file__), 'wireguard_docker_setup.sh')
@@ -873,13 +875,13 @@ PersistentKeepalive = 25
             cloud_config = f"""#cloud-config
 
 write_files:
-  - path: /usr/local/bin/wireguard_direct_setup.sh
+  - path: /usr/local/bin/wireguard_docker_setup.sh
     permissions: '0755'
     content: |
 {indented_script}
 
 runcmd:
-  - [ bash, -c, "/usr/local/bin/wireguard_direct_setup.sh" ]
+  - [ bash, -c, "/usr/local/bin/wireguard_docker_setup.sh" ]
 """
             return cloud_config
         except Exception as e:
