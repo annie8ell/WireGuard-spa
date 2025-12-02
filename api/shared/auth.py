@@ -22,6 +22,7 @@ def validate_user(req) -> Tuple[bool, Optional[str], Optional[str]]:
     and checking for the 'invited' role as defense in depth.
     
     In dry run mode, authentication is bypassed for local development.
+    Also bypassed when running locally (detected by AzureWebJobsStorage being empty).
     
     SWA authentication should already enforce invited users only,
     but this provides an additional security layer.
@@ -33,6 +34,11 @@ def validate_user(req) -> Tuple[bool, Optional[str], Optional[str]]:
     if is_dry_run():
         logger.info('DRY RUN: Skipping authentication for local development')
         return True, 'dry-run-user@example.com', None
+    
+    # When running locally (AzureWebJobsStorage is empty), skip authentication
+    if not os.environ.get('AzureWebJobsStorage'):
+        logger.info('LOCAL DEVELOPMENT: Skipping authentication for local testing')
+        return True, 'local-dev-user@example.com', None
     
     try:
         # Get the X-MS-CLIENT-PRINCIPAL header

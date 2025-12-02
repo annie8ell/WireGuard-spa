@@ -8,6 +8,8 @@
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/foundation-sites@6.8.1/dist/css/foundation.min.css">
     <!-- Alpine.js latest 3.x.x build via CDN -->
     <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+    <!-- QRCode.js for generating QR codes -->
+    <script src="qrcode.min.js"></script>
     <style>
         * {
             box-sizing: border-box;
@@ -285,6 +287,35 @@
             clear: both;
         }
         
+        .config-section {
+            display: flex;
+            gap: 2rem;
+            align-items: flex-start;
+            margin: 1.5rem 0;
+            flex-wrap: wrap;
+        }
+        
+        .qr-code-section {
+            flex: 1;
+            min-width: 250px;
+            text-align: center;
+        }
+        
+        .qr-code-canvas {
+            max-width: 100%;
+            height: auto;
+            border: 2px solid #e0e0e0;
+            border-radius: 8px;
+            margin: 1rem 0;
+        }
+        
+        .download-section {
+            flex: 1;
+            min-width: 250px;
+            display: flex;
+            align-items: center;
+        }
+        
         @media (max-width: 768px) {
             .container {
                 padding: 1.5rem 1rem;
@@ -301,6 +332,15 @@
             
             .button.large {
                 width: 100%;
+            }
+            
+            .config-section {
+                flex-direction: column;
+                gap: 1rem;
+            }
+            
+            .qr-code-section, .download-section {
+                min-width: unset;
             }
         }
     </style>
@@ -368,10 +408,17 @@
     <div x-show="showSuccess" class="status-message status-success">
             <h4>✅ VPN Ready!</h4>
             <p>Your WireGuard configuration is ready. Download it and import into your WireGuard client.</p>
-            <div class="button-group">
-                <button @click="downloadConfig()" class="button success large">
-                    📥 Download wireguard.conf
-                </button>
+            <div class="config-section">
+                <div class="qr-code-section">
+                    <h5>📱 Scan QR Code</h5>
+                    <p>Scan this QR code with your WireGuard mobile app:</p>
+                    <canvas id="qrcode-canvas" class="qr-code-canvas"></canvas>
+                </div>
+                <div class="download-section">
+                    <button @click="downloadConfig()" class="button success large">
+                        📥 Download wireguard.conf
+                    </button>
+                </div>
             </div>
             <details style="margin-top: 1rem;">
                 <summary>📋 Show Configuration</summary>
@@ -406,6 +453,79 @@
                 
                 async init() {
                     await this.loadUser();
+                    // Check for cached config on page load
+                    this.checkCachedConfig();
+                },
+
+                // Config caching methods
+                saveConfigToCache(operationId, configText) {
+                    const cacheData = {
+                        configText: configText,
+                        operationId: operationId,
+                        timestamp: Date.now(),
+                        expiresAt: Date.now() + (30 * 60 * 1000) // 30 minutes
+                    };
+                    sessionStorage.setItem(`wireguard_config_${operationId}`, JSON.stringify(cacheData));
+                },
+
+                getCachedConfig(operationId) {
+                    const cacheKey = `wireguard_config_${operationId}`;
+                    const cached = sessionStorage.getItem(cacheKey);
+                    
+                    if (!cached) return null;
+                    
+                    try {
+                        const cacheData = JSON.parse(cached);
+                        
+                        // Check if expired
+                        if (Date.now() > cacheData.expiresAt) {
+                            sessionStorage.removeItem(cacheKey);
+                            return null;
+                        }
+                        
+                        return cacheData;
+                    } catch (err) {
+                        console.error('Error parsing cached config:', err);
+                        sessionStorage.removeItem(cacheKey);
+                        return null;
+                    }
+                },
+
+                checkCachedConfig() {
+                    // Check URL parameters for operationId first
+                    const urlParams = new URLSearchParams(window.location.search);
+                    let operationId = urlParams.get('id');
+                    
+                    // If no operationId in URL, check sessionStorage for any recent cached configs
+                    if (!operationId) {
+                        // Look for any cached config that hasn't expired
+                        for (let i = 0; i < sessionStorage.length; i++) {
+                            const key = sessionStorage.key(i);
+                            if (key && key.startsWith('wireguard_config_')) {
+                                const cached = this.getCachedConfig(key.replace('wireguard_config_', ''));
+                                if (cached) {
+                                    operationId = cached.operationId;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    
+                    if (operationId) {
+                        const cached = this.getCachedConfig(operationId);
+                        if (cached) {
+                            this.orchestrationId = operationId;
+                            this.status = 'Completed';
+                            this.configText = cached.configText;
+                            // Use setTimeout to ensure DOM is ready
+                            setTimeout(() => {
+                                this.generateQRCode();
+                            }, 100);
+                            return true;
+                        }
+                    }
+                    
+                    return false;
                 },
 
                 async loadUser() {
@@ -467,7 +587,7 @@
                             headers: {
                                 'Content-Type': 'application/json'
                             },
-                            body: JSON.stringify({ location: 'eastus' })
+                            body: JSON.stringify({ location: 'westeurope' })
                         });
 
                         if (!response.ok) {
@@ -505,6 +625,16 @@
                 async checkStatus() {
                     if (!this.orchestrationId) return;
                     
+                    // Check sessionStorage first - if we have a valid cached config, use it immediately
+                    const cached = this.getCachedConfig(this.orchestrationId);
+                    if (cached) {
+                        this.status = 'Completed';
+                        this.configText = cached.configText;
+                        this.generateQRCode();
+                        clearInterval(this.pollInterval);
+                        return;
+                    }
+                    
                     try {
                         const response = await fetch(`/api/job_status?id=${this.orchestrationId}`);
                         
@@ -513,16 +643,33 @@
                         }
 
                         const data = await response.json();
+                        console.log('Status response:', data);
                         this.status = data.runtimeStatus;
                         
                         if (data.runtimeStatus === 'Completed') {
+                            console.log('Status is Completed, checking for config...');
                             clearInterval(this.pollInterval);
                             
                             if (data.output && data.output.confText) {
+                                console.log('Found confText in data.output:', data.output.confText.substring(0, 50) + '...');
                                 this.configText = data.output.confText;
+                                // Cache the config in sessionStorage
+                                this.saveConfigToCache(this.orchestrationId, this.configText);
+                                // Use setTimeout to ensure DOM is updated before generating QR code
+                                setTimeout(() => {
+                                    this.generateQRCode();
+                                }, 100);
                             } else if (data.output && data.output.status === 'ready') {
+                                console.log('Found status ready, confText:', data.output.confText ? data.output.confText.substring(0, 50) + '...' : 'undefined');
                                 this.configText = data.output.confText;
+                                // Cache the config in sessionStorage
+                                this.saveConfigToCache(this.orchestrationId, this.configText);
+                                // Use setTimeout to ensure DOM is updated before generating QR code
+                                setTimeout(() => {
+                                    this.generateQRCode();
+                                }, 100);
                             } else {
+                                console.error('Configuration not available in response, data.output:', data.output);
                                 this.error = 'Configuration not available in response';
                             }
                         } else if (data.runtimeStatus === 'Failed') {
@@ -555,6 +702,60 @@
                     URL.revokeObjectURL(url);
                 },
 
+                generateQRCode() {
+                    console.log('generateQRCode called, configText:', this.configText);
+                    
+                    if (!this.configText) {
+                        console.error('No configText available for QR code generation');
+                        return;
+                    }
+                    
+                    // Check if QRCode library is loaded
+                    if (typeof QRCode === 'undefined') {
+                        console.error('QRCode library not loaded');
+                        return;
+                    }
+                    
+                    const canvas = document.getElementById('qrcode-canvas');
+                    console.log('Canvas element:', canvas);
+                    
+                    if (!canvas) {
+                        console.error('QR code canvas element not found');
+                        return;
+                    }
+                    
+                    // Ensure canvas has proper dimensions
+                    canvas.width = 256;
+                    canvas.height = 256;
+                    
+                    // Clear any existing QR code
+                    const ctx = canvas.getContext('2d');
+                    ctx.clearRect(0, 0, canvas.width, canvas.height);
+                    
+                    console.log('Generating QR code for config:', this.configText.substring(0, 50) + '...');
+                    
+                    try {
+                        // Generate QR code
+                        QRCode.toCanvas(canvas, this.configText, {
+                            width: 256,
+                            height: 256,
+                            color: {
+                                dark: '#000000',
+                                light: '#FFFFFF'
+                            },
+                            errorCorrectionLevel: 'M'
+                        }, (error) => {
+                            if (error) {
+                                console.error('QR code generation failed:', error);
+                            } else {
+                                console.log('QR code generated successfully');
+                            }
+                        });
+                    } catch (error) {
+                        console.error('Exception during QR code generation:', error);
+                    }
+                },
+
                 reset() {
                     this.orchestrationId = null;
                     this.status = null;
@@ -563,6 +764,13 @@
                     this.error = null;
                     if (this.pollInterval) {
                         clearInterval(this.pollInterval);
+                    }
+                    
+                    // Clear QR code canvas
+                    const canvas = document.getElementById('qrcode-canvas');
+                    if (canvas) {
+                        const ctx = canvas.getContext('2d');
+                        ctx.clearRect(0, 0, canvas.width, canvas.height);
                     }
                 }
             };

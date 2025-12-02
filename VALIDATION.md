@@ -141,7 +141,7 @@ All acceptance criteria from the problem statement have been met:
 3. ✅ **Backend implements async provisioning pattern**
    - API endpoints: `/api/start_job` (POST) and `/api/job_status` (GET)
    - Uses 202 Accepted pattern for async operations
-   - VMs auto-delete after 30 minutes
+   - VMs auto-shut down after 30 minutes via Azure auto-shutdown schedules
 
 4. ✅ **CI/CD workflow exists**
    - Single SWA deployment workflow (deploys both frontend and API)

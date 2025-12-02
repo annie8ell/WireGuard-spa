@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WireGuard SPA Debug Tools</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            color: white;
+        }
+        .container {
+            background: rgba(255, 255, 255, 0.95);
+            padding: 30px;
+            border-radius: 12px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+        }
+        h1 {
+            color: #333;
+            text-align: center;
+            margin-bottom: 10px;
+        }
+        .subtitle {
+            text-align: center;
+            color: #666;
+            margin-bottom: 30px;
+        }
+        .tool-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 20px;
+            margin: 30px 0;
+        }
+        .tool-card {
+            background: white;
+            border: 1px solid #e0e0e0;
+            border-radius: 8px;
+            padding: 20px;
+            text-decoration: none;
+            color: #333;
+            transition: all 0.3s ease;
+            display: block;
+        }
+        .tool-card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 10px 25px rgba(0, 0, 0, 0.15);
+            border-color: #667eea;
+        }
+        .tool-icon {
+            font-size: 2rem;
+            margin-bottom: 10px;
+            display: block;
+        }
+        .tool-title {
+            font-size: 1.2rem;
+            font-weight: 600;
+            margin-bottom: 8px;
+            color: #667eea;
+        }
+        .tool-description {
+            color: #666;
+            font-size: 0.9rem;
+            line-height: 1.4;
+        }
+        .status {
+            display: inline-block;
+            padding: 4px 8px;
+            border-radius: 12px;
+            font-size: 0.8rem;
+            font-weight: 500;
+            margin-top: 10px;
+        }
+        .status.ready { background: #d4edda; color: #155724; }
+        .status.main { background: #cce5ff; color: #004085; }
+        .quick-start {
+            background: #f8f9fa;
+            border: 1px solid #dee2e6;
+            border-radius: 8px;
+            padding: 20px;
+            margin: 20px 0;
+        }
+        .quick-start h3 {
+            color: #333;
+            margin-top: 0;
+        }
+        .command {
+            background: #000;
+            color: #0f0;
+            font-family: 'Courier New', monospace;
+            padding: 10px;
+            border-radius: 4px;
+            margin: 10px 0;
+            font-size: 0.9rem;
+        }
+        .button {
+            display: inline-block;
+            padding: 12px 24px;
+            background: #667eea;
+            color: white;
+            text-decoration: none;
+            border-radius: 6px;
+            font-weight: 600;
+            margin: 10px 5px 10px 0;
+            transition: background 0.3s ease;
+        }
+        .button:hover {
+            background: #5568d3;
+        }
+        .button.secondary {
+            background: #6c757d;
+        }
+        .button.secondary:hover {
+            background: #545b62;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🔧 WireGuard SPA Debug Tools</h1>
+        <p class="subtitle">Debugging tools for the WireGuard on-demand launcher</p>
+
+        <div class="quick-start">
+            <h3>🚀 Quick Start</h3>
+            <p><strong>1. Start your SWA server:</strong></p>
+            <div class="command">swa start ./frontend/public/ --api-location ./api/ --api-port 7072 --login local</div>
+
+            <p><strong>2. Start the debug server (if not running):</strong></p>
+            <div class="command">python3 -m http.server 8080 --directory /workspaces/WireGuard-spa</div>
+
+            <p><strong>3. Use the debugging tools below to identify the QR code issue.</strong></p>
+        </div>
+
+        <div class="tool-grid">
+            <a href="http://localhost:4280" class="tool-card">
+                <div class="tool-icon">🔐</div>
+                <div class="tool-title">Main WireGuard App</div>
+                <div class="tool-description">Your main WireGuard SPA application. Start here to see the actual QR code issue.</div>
+                <span class="status main">Main App</span>
+            </a>
+
+            <a href="qr-debugger.html" class="tool-card">
+                <div class="tool-icon">🔍</div>
+                <div class="tool-title">QR Code Debugger</div>
+                <div class="tool-description">Comprehensive debugging tool that tests QRCode library, canvas, and simulates your app's generateQRCode function.</div>
+                <span class="status ready">Ready to Use</span>
+            </a>
+
+            <a href="qr-test-exact.html" class="tool-card">
+                <div class="tool-icon">✅</div>
+                <div class="tool-title">Working QR Code Test</div>
+                <div class="tool-description">Shows what a working QR code should look like with your exact WireGuard config format.</div>
+                <span class="status ready">Ready to Use</span>
+            </a>
+
+            <a href="qr-test.html" class="tool-card">
+                <div class="tool-icon">🧪</div>
+                <div class="tool-title">Basic QR Test</div>
+                <div class="tool-description">Simple test page for basic QR code generation functionality.</div>
+                <span class="status ready">Ready to Use</span>
+            </a>
+
+            <a href="test-wireguard-spa.js" class="tool-card">
+                <div class="tool-icon">📋</div>
+                <div class="tool-title">Test Script Reference</div>
+                <div class="tool-description">Reference guide for the automated testing approach (for future MCP integration).</div>
+                <span class="status ready">Reference</span>
+            </a>
+        </div>
+
+        <div style="text-align: center; margin-top: 30px;">
+            <a href="README.md" class="button secondary">📖 View README</a>
+            <a href="ARCHITECTURE.md" class="button secondary">🏗️ View Architecture</a>
+        </div>
+
+        <div style="text-align: center; margin-top: 20px; color: #666; font-size: 0.9rem;">
+            <p>🐛 Having issues? Check the browser console (F12) for JavaScript errors.</p>
+            <p>🔄 Remember to start both the SWA server (port 4280) and debug server (port 8080).</p>
+        </div>
+    </div>
+</body>
+</html>

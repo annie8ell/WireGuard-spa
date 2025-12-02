@@ -1,6 +1,6 @@
 # WireGuard On-Demand Launcher
 
-A minimal end-to-end solution for provisioning on-demand WireGuard VPN servers on Azure. This project uses a zero-build SPA frontend with Azure Static Web Apps authentication and Python-based built-in Functions that asynchronously create Ubuntu VMs with WireGuard, then automatically tear them down after 30 minutes.
+A minimal end-to-end solution for provisioning on-demand WireGuard VPN servers on Azure. This project uses a zero-build SPA frontend with Azure Static Web Apps authentication and Python-based built-in Functions that asynchronously create Flatcar Container Linux VMs with Docker-based WireGuard, then automatically tear them down after 30 minutes.
 
 > **📝 Note**: This project has migrated from Azure Durable Functions to Azure Static Web Apps built-in Functions. See [MIGRATION.md](MIGRATION.md) for details.
 
@@ -20,6 +20,9 @@ A minimal end-to-end solution for provisioning on-demand WireGuard VPN servers o
   - `POST /api/start_job` - Returns 202 with operationId, initiates async VM creation
   - `GET /api/job_status?id={operationId}` - Queries Azure for VM status (pass-through)
 - **VM Provisioning**: Directly creates Azure VMs using Azure SDK with Service Principal credentials
+  - Uses **Flatcar Container Linux** for faster boot times and built-in Docker support
+  - WireGuard runs in a Docker container (`linuxserver/wireguard`)
+  - Configuration generated on-VM with random keys via Azure Run Command
 - **Auto-teardown**: VMs automatically deleted after 30 minutes
 
 ### Why VM instead of ACI?
@@ -31,8 +34,10 @@ WireGuard requires kernel-level TUN/TAP device support which Azure Container Ins
 - ✅ **Built-in authentication** - Uses Azure SWA auth (Google/Microsoft)
 - ✅ **Invite-only access** - Role-based authorization using SWA's 'invited' role
 - ✅ **Pass-through architecture** - No local state, queries Azure directly for status
+- ✅ **Docker-based WireGuard** - Uses Flatcar Container Linux and linuxserver/wireguard container
+- ✅ **Stateless key generation** - WireGuard keys generated on VM, not stored in API
 - ✅ **DRY_RUN mode** - Test without provisioning Azure resources
-- ✅ **Automatic teardown** - VMs automatically deleted after 30 minutes
+- **Automatic teardown** - VMs automatically shut down after 30 minutes via Azure auto-shutdown schedules
 - ✅ **Minimal cost** - Uses cheapest VM size (Standard_B1ls)
 - ✅ **Download config** - WireGuard configuration downloads as `.conf` file
 - ✅ **CI/CD ready** - GitHub Actions workflows included
@@ -194,9 +199,37 @@ az functionapp config appsettings set \
 
 **Important**: Before switching to production, ensure:
 1. SSH key management is configured (currently uses placeholder)
-2. The actual WireGuard server configuration is implemented on the VM
-3. You've tested the complete flow end-to-end
-4. You understand the cost implications of running VMs
+2. You've tested the complete flow end-to-end
+3. You understand the cost implications of running VMs
+
+## Docker-Based WireGuard Deployment
+
+The application uses **Flatcar Container Linux** for fast VM provisioning and Docker-based WireGuard deployment:
+
+### How It Works
+
+1. **VM Creation**: Azure creates a Flatcar Container Linux VM (Standard_B1ls)
+2. **WireGuard Setup**: Once VM is ready, Azure Run Command executes a script that:
+   - Generates random WireGuard keys on the VM (server and client)
+   - Creates WireGuard server configuration
+   - Pulls and starts `linuxserver/wireguard` Docker container
+   - Outputs client configuration with generated keys
+3. **Config Retrieval**: API extracts the client .conf from Run Command output
+4. **User Access**: Frontend displays the configuration for download
+
+### Key Benefits
+
+- **Faster Boot**: Flatcar Container Linux boots faster than traditional Ubuntu
+- **Stateless Keys**: WireGuard keys generated on-VM, not stored in API
+- **Container Isolation**: WireGuard runs in isolated Docker container
+- **Proven Image**: Uses popular `linuxserver/wireguard` container image
+- **Full Automation**: No manual steps required, completely automated
+
+### Files Involved
+
+- `api/shared/vm_provisioner.py` - VM creation and Run Command execution
+- `api/shared/wireguard_docker_setup.sh` - Setup script executed on VM
+- Network Security Group automatically allows UDP 51820 for WireGuard
 
 ## Development
 

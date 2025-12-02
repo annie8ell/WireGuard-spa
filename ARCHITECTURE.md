@@ -57,27 +57,31 @@
 │  │  ┌──────────────────────────────────────────────────────┐  │     │
 │  │  │  Shared Modules                                      │  │     │
 │  │  │  • auth.py: User validation                          │  │     │
-│  │  │  • status_store.py: In-memory job tracking           │  │     │
-│  │  │  • upstream.py: Upstream provider integration        │  │     │
+│  │  │  • vm_provisioner.py: Direct Azure VM provisioning   │  │     │
+│  │  │  • wireguard_docker_setup.sh: On-VM setup script     │  │     │
 │  │  └──────────────────────────────────────────────────────┘  │     │
 │  └────────────────────────────────────────────────────────────┘     │
 └─────────────────────────────────────────────────────────────────────┘
                            │
-                           │ Calls upstream API
+                           │ Direct Azure SDK calls
                            ▼
 ┌─────────────────────────────────────────────────────────────────────┐
-│                      Upstream Provider API                           │
+│                      Azure Resources                                 │
 │  ┌──────────────────────────────────────────────────────────────┐   │
-│  │  POST /provision - Start VM and WireGuard setup              │   │
-│  │  GET /status/{id} - Check provisioning status                │   │
+│  │  Compute Management API                                       │   │
+│  │  • Create VM (Flatcar Container Linux)                       │   │
+│  │  • Get VM status                                             │   │
+│  │  • Execute Run Command (WireGuard setup)                     │   │
 │  └──────────────────────────────────────────────────────────────┘   │
 │                           │                                           │
 │                           │ Provisions and configures                 │
 │                           ▼                                           │
 │  ┌──────────────────────────────────────────────────────────────┐   │
-│  │  Ephemeral VMs with WireGuard                                │   │
-│  │  • Created on-demand                                         │   │
-│  │  • Auto-teardown (handled by upstream)                       │   │
+│  │  Ephemeral VMs with Docker-based WireGuard                   │   │
+│  │  • Flatcar Container Linux (Standard_B1ls)                   │   │
+│  │  • linuxserver/wireguard Docker container                    │   │
+│  │  • Keys generated on-VM (stateless)                          │   │
+│  │  • Auto-teardown after 30 minutes                            │   │
 │  └──────────────────────────────────────────────────────────────┘   │
 └─────────────────────────────────────────────────────────────────────┘
 ```
@@ -184,32 +188,100 @@ Frontend            job_status Function     Status Store      Background Thread
   │  {confText, ...}      │                      │                  │
 ```
 
-### 4. Auto-teardown Flow
-
-> **Note**: Auto-teardown (e.g., after 30 minutes) is now handled by the upstream provider, not by the SWA Functions. This simplifies the architecture and removes the need for durable timers.
+### 4. Docker-based WireGuard Setup Flow
 
 ```
-Upstream Provider
-  │
-  ├─ VM Created
-  │
-  ├─ Start internal timer (30 minutes)
-  │
-  ├─ Timer expires
-  │
-  ├─ Delete VM and resources
-  │  • VM instance
-  │  • Network interfaces
-  │  • Public IPs
-  │  • Virtual networks
-  │
-  └─ Cleanup complete
+VM Provisioner         Azure VM            Run Command         Docker Container
+  │                      │                      │                      │
+  ├─ Create VM           │                      │                      │
+  │  (Flatcar Linux)     │                      │                      │
+  │                      │                      │                      │
+  ├─────────────────────>│                      │                      │
+  │  VM Creation         │                      │                      │
+  │  started             │                      │                      │
+  │                      │                      │                      │
+  │                      ├─ VM boots            │                      │
+  │                      │  (Flatcar + Docker)  │                      │
+  │                      │                      │                      │
+  ├─ Poll VM Status      │                      │                      │
+  ├─────────────────────>│                      │                      │
+  │<─────────────────────┤                      │                      │
+  │  Status: Succeeded   │                      │                      │
+  │                      │                      │                      │
+  ├─ Execute Run Command │                      │                      │
+  ├──────────────────────┼─────────────────────>│                      │
+  │  wireguard_docker_   │                      │                      │
+  │  setup.sh            │                      │                      │
+  │                      │                      │                      │
+  │                      │                      ├─ Generate keys       │
+  │                      │                      │  (wg genkey)         │
+  │                      │                      │                      │
+  │                      │                      ├─ Create wg0.conf     │
+  │                      │                      │                      │
+  │                      │                      ├─ Pull image          │
+  │                      │                      ├─────────────────────>│
+  │                      │                      │  linuxserver/        │
+  │                      │                      │  wireguard           │
+  │                      │                      │                      │
+  │                      │                      ├─ Start container     │
+  │                      │                      ├─────────────────────>│
+  │                      │                      │                      │
+  │                      │                      │                      ├─ WireGuard running
+  │                      │                      │                      │  on UDP 51820
+  │                      │                      │                      │
+  │                      │                      ├─ Output client conf  │
+  │                      │                      │  (between markers)   │
+  │<─────────────────────┼──────────────────────┤                      │
+  │  Run Command output  │                      │                      │
+  │  with client .conf   │                      │                      │
+  │                      │                      │                      │
+  ├─ Extract config      │                      │                      │
+  │  from output         │                      │                      │
+  │                      │                      │                      │
+  ├─ Return to client    │                      │                      │
+  │  Status: Succeeded   │                      │                      │
+  │  confText: [Interf..]│                      │                      │
 ```
 
-If the upstream provider does not support auto-teardown:
-- Consider adding a cleanup endpoint: `POST /api/cleanup?id={operationId}`
-- Frontend could call this after user disconnects
-- Or implement a scheduled cleanup job separately
+### 5. Auto-teardown Flow
+
+**Auto-shutdown is now implemented programmatically** using Azure DevTest Lab schedules. Each VM is configured with an auto-shutdown schedule during creation that shuts down the VM after 30 minutes.
+
+```
+VM Creation Flow (Updated)
+  │
+  ├─ Create VM resources (NIC, Public IP, VM)
+  │
+  ├─ Configure auto-shutdown schedule
+  │  • Creates Microsoft.DevTestLab/schedules resource
+  │  • Sets shutdown time to 30 minutes from creation
+  │  • Targets the specific VM
+  │
+  ├─ VM starts and WireGuard configures
+  │
+  └─ VM automatically shuts down after 30 minutes
+```
+
+**Restart Flow (for stopped VMs):**
+```
+User Request
+  │
+  ├─ Check for existing WireGuard VM
+  │
+  ├─ If VM exists but is stopped:
+  │  │
+  │  ├─ Start the VM
+  │  ├─ Return existing WireGuard config
+  │  └─ (Same config preserved across sessions)
+  │
+  └─ User gets same VPN connection
+```
+
+**Benefits:**
+- ✅ **Preserves WireGuard config** across sessions
+- ✅ **Cost-effective** (only compute costs when in use)
+- ✅ **Automatic cleanup** (no manual intervention needed)
+- ✅ **Simple implementation** (uses Azure built-in features)
 
 ## Security Architecture
 
@@ -420,12 +492,13 @@ Upstream costs                          Varies by provider
 
 ### Cost Control Strategies
 
-1. **Free SWA Tier**: Sufficient for most use cases
-2. **Serverless Functions**: Pay per request, not per hour
-3. **In-memory Store**: No external storage costs (can upgrade later)
-4. **DRY_RUN Mode**: Test without provisioning resources
-5. **Short Sessions**: Upstream provider manages VM lifetime
-6. **Efficient Polling**: Balance freshness vs. API costs
+1. **Auto-shutdown after 30 minutes**: VMs automatically shut down via Azure schedules, stopping compute costs
+2. **Restart capability**: Stopped VMs can be restarted with preserved WireGuard config
+3. **Free SWA Tier**: Sufficient for most use cases
+4. **Serverless Functions**: Pay per request, not per hour
+5. **In-memory Store**: No external storage costs (can upgrade later)
+6. **DRY_RUN Mode**: Test without provisioning resources
+7. **Short Sessions**: VMs shut down automatically after 30 minutes
 
 ## Future Architecture Enhancements
 
@@ -464,20 +537,24 @@ Upstream costs                          Varies by provider
 
 ## Key Design Decisions
 
-### Why SWA Functions instead of Durable Functions?
+### Why Auto-Shutdown + Restart instead of Deletion?
 
 **Benefits:**
-- ✅ Simpler architecture (single resource)
-- ✅ Lower cost (no separate Function App or Storage)
-- ✅ Easier deployment (single workflow)
-- ✅ Better integration (frontend + API in one resource)
-- ✅ Standard REST pattern (202 Accepted)
+- ✅ **Preserves WireGuard config** across sessions (users get same connection)
+- ✅ **Cost-effective** (deallocated VMs only incur storage costs ~$0.05/month)
+- ✅ **Simple implementation** (uses Azure built-in DevTest Lab schedules)
+- ✅ **Reliable cleanup** (Azure handles the scheduling)
+- ✅ **Better UX** (users can reconnect to same VPN without re-setup)
 
 **Trade-offs:**
-- ⚠️ No built-in state management (must implement)
-- ⚠️ No durable timers (delegate to upstream)
-- ⚠️ Polling required (can add webhooks later)
-- ⚠️ Shorter timeout limits (can work around with async pattern)
+- ⚠️ **Storage costs** (minimal - ~$0.05/month per VM disk)
+- ⚠️ **Resource accumulation** (VMs persist but stopped)
+- ⚠️ **Manual cleanup still needed** (for long-term resource management)
+
+**Upgrade Path:**
+- Add periodic cleanup job to delete old stopped VMs
+- Implement usage-based cleanup (delete after X days stopped)
+- Add admin interface for manual VM management
 
 ### Why In-memory Status Store?
 
