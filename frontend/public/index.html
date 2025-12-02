@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>WireGuard On-Demand Launcher</title>
+    <title>WireGuard Ephemeral VPN</title>
     <!-- Foundation CSS via CDN -->
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/foundation-sites@6.8.1/dist/css/foundation.min.css">
     <!-- Alpine.js latest 3.x.x build via CDN -->
@@ -347,8 +347,8 @@
 </head>
 <body>
     <div class="container" x-data="vpnLauncher()" x-init="init()">
-        <h1>🔐 WireGuard On-Demand Launcher </h1>
-        <p class="subtitle">Provision secure VPN servers on-demand with automatic cleanup</p>
+        <h1>🔐 WireGuard VPN</h1>
+        <p class="subtitle">Ephemeral VPN service with automatic 30-minute cleanup</p>
         
         <!-- Loading State -->
         <div x-show="loading" class="status-message status-loading">
@@ -362,7 +362,6 @@
                 <p>You need to sign in to access this application.</p>
                 <div class="button-group">
                     <a href="/.auth/login/google" class="button primary">Sign in with Google</a>
-                    <a href="/.auth/login/aad" class="button primary">Sign in with Microsoft</a>
                 </div>
             </div>
         </div>
@@ -381,9 +380,9 @@
         <!-- Request VPN Section -->
     <div x-show="showRequestSection">
             <h3>📡 Request a WireGuard VPN</h3>
-            <p>Click the button below to provision your on-demand WireGuard VPN. The VM will automatically tear down after 30 minutes.</p>
+            <p>Click the button below to provision your on-demand WireGuard VPN in West Europe. The VM will automatically terminate after 30 minutes.</p>
             <div class="info-box">
-                <small>💡 <strong>How it works:</strong> We'll provision a secure VPN server in Azure that's tailored to your needs. You'll receive a WireGuard configuration file that you can import into any WireGuard client.</small>
+                <small>💡 <strong>How it works:</strong> A secure WireGuard VPN server is provisioned in Azure West Europe. Scan the QR code or download the config file to connect.</small>
             </div>
             <button 
                 @click="requestVPN()" 

@@ -473,6 +473,17 @@ class VMProvisioner:
                 vm_params
             )
             
+            # Wait for VM creation to complete so we can configure auto-shutdown
+            try:
+                vm_result = vm_poller.result(timeout=300)  # 5-minute timeout
+                logger.info(f"VM {vm_name} created successfully")
+                
+                # Configure 30-minute auto-shutdown schedule
+                self._configure_auto_shutdown(vm_name, location)
+                
+            except Exception as vm_wait_error:
+                logger.warning(f"VM creation still in progress, auto-shutdown will be configured later: {vm_wait_error}")
+            
             # Return immediately with operation details
             return True, None, {
                 'vmName': vm_name,
@@ -660,6 +671,79 @@ class VMProvisioner:
         except Exception as e:
             logger.error(f"Error deleting VM {vm_name}: {str(e)}", exc_info=True)
             return False, f"Failed to delete VM: {str(e)}"
+    
+    def _configure_auto_shutdown(self, vm_name: str, location: str) -> bool:
+        """
+        Configure 30-minute auto-shutdown for a VM using Azure DevTest Labs auto-shutdown feature.
+        This creates an auto-shutdown schedule that will terminate the VM 30 minutes from now.
+        Returns True if successful, False otherwise.
+        """
+        if is_dry_run():
+            logger.info(f"DRY RUN: Would configure 30-minute auto-shutdown for VM {vm_name}")
+            return True
+        
+        try:
+            from datetime import datetime, timedelta
+            import requests
+            
+            # Calculate shutdown time (30 minutes from now)
+            shutdown_time = datetime.utcnow() + timedelta(minutes=30)
+            # Format as HHmm for the daily recurrence time
+            shutdown_time_str = shutdown_time.strftime('%H%M')
+            
+            logger.info(f"Configuring auto-shutdown for VM {vm_name} at {shutdown_time_str} UTC")
+            
+            # Create auto-shutdown schedule using REST API
+            # The schedule name must be in format: shutdown-computevm-{vmname}
+            schedule_name = f"shutdown-computevm-{vm_name}"
+            
+            # Get access token
+            from azure.identity import ClientSecretCredential
+            credential = self.credential
+            token = credential.get_token("https://management.azure.com/.default")
+            
+            # Create the auto-shutdown schedule resource
+            schedule_resource = {
+                "location": location,
+                "properties": {
+                    "status": "Enabled",
+                    "taskType": "ComputeVmShutdownTask",
+                    "dailyRecurrence": {
+                        "time": shutdown_time_str
+                    },
+                    "timeZoneId": "UTC",
+                    "notificationSettings": {
+                        "status": "Disabled"
+                    },
+                    "targetResourceId": f"/subscriptions/{self.subscription_id}/resourceGroups/{self.resource_group}/providers/Microsoft.Compute/virtualMachines/{vm_name}"
+                },
+                "tags": {
+                    "purpose": "wireguard-auto-shutdown",
+                    "vm-name": vm_name
+                }
+            }
+            
+            # REST API URL for auto-shutdown schedule
+            url = f"https://management.azure.com/subscriptions/{self.subscription_id}/resourceGroups/{self.resource_group}/providers/Microsoft.DevTestLab/schedules/{schedule_name}?api-version=2018-09-15"
+            
+            headers = {
+                "Authorization": f"Bearer {token.token}",
+                "Content-Type": "application/json"
+            }
+            
+            response = requests.put(url, headers=headers, json=schedule_resource)
+            
+            if response.status_code in [200, 201]:
+                logger.info(f"Auto-shutdown configured for VM {vm_name} - will shut down at {shutdown_time_str} UTC")
+                return True
+            else:
+                logger.warning(f"Failed to configure auto-shutdown for VM {vm_name}: {response.status_code} - {response.text}")
+                return False
+                
+        except Exception as e:
+            logger.warning(f"Could not configure auto-shutdown for VM {vm_name}: {str(e)}")
+            # Don't fail the VM creation just because auto-shutdown couldn't be configured
+            return False
     
     def _retrieve_wireguard_config_via_run_command(self, vm_name: str) -> Optional[str]:
         """

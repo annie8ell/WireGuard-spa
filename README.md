@@ -1,489 +1,251 @@
-# WireGuard On-Demand Launcher
+# WireGuard Ephemeral VPN
 
-A minimal end-to-end solution for provisioning on-demand WireGuard VPN servers on Azure. This project uses a zero-build SPA frontend with Azure Static Web Apps authentication and Python-based built-in Functions that asynchronously create Flatcar Container Linux VMs with Docker-based WireGuard, then automatically tear them down after 30 minutes.
-
-> **📝 Note**: This project has migrated from Azure Durable Functions to Azure Static Web Apps built-in Functions. See [MIGRATION.md](MIGRATION.md) for details.
-
-## Architecture Overview
-
-### Frontend (SPA)
-- **Technology**: Zero-build Single Page Application using Foundation CSS and Alpine.js (via CDN)
-- **Authentication**: Azure Static Web Apps built-in authentication (Google/Microsoft)
-- **Authorization**: Invite-only access using SWA's built-in role system - only users with 'invited' role can access
-- **Deployment**: Azure Static Web Apps (single resource)
-
-### Backend (SWA Built-in Functions)
-- **Technology**: Python 3.11 Azure Static Web Apps Functions
-- **Pattern**: Async HTTP API with 202 Accepted + status polling pattern (pass-through to Azure)
-- **Authentication**: Validates X-MS-CLIENT-PRINCIPAL header for 'invited' role (defense in depth)
-- **Endpoints**:
-  - `POST /api/start_job` - Returns 202 with operationId, initiates async VM creation
-  - `GET /api/job_status?id={operationId}` - Queries Azure for VM status (pass-through)
-- **VM Provisioning**: Directly creates Azure VMs using Azure SDK with Service Principal credentials
-  - Uses **Flatcar Container Linux** for faster boot times and built-in Docker support
-  - WireGuard runs in a Docker container (`linuxserver/wireguard`)
-  - Configuration generated on-VM with random keys via Azure Run Command
-- **Auto-teardown**: VMs automatically deleted after 30 minutes
-
-### Why VM instead of ACI?
-WireGuard requires kernel-level TUN/TAP device support which Azure Container Instances (ACI) doesn't provide. A lightweight VM (Standard_B1ls) is the most straightforward solution for running WireGuard on Azure.
+A simplified solution for provisioning ephemeral WireGuard VPN servers on Azure. Deploy with one click, connect via QR code, and the VM automatically self-destructs after 30 minutes.
 
 ## Features
 
-- ✅ **Zero-build SPA** - No compilation or bundling required
-- ✅ **Built-in authentication** - Uses Azure SWA auth (Google/Microsoft)
-- ✅ **Invite-only access** - Role-based authorization using SWA's 'invited' role
-- ✅ **Pass-through architecture** - No local state, queries Azure directly for status
-- ✅ **Docker-based WireGuard** - Uses Flatcar Container Linux and linuxserver/wireguard container
-- ✅ **Stateless key generation** - WireGuard keys generated on VM, not stored in API
-- ✅ **DRY_RUN mode** - Test without provisioning Azure resources
-- **Automatic teardown** - VMs automatically shut down after 30 minutes via Azure auto-shutdown schedules
-- ✅ **Minimal cost** - Uses cheapest VM size (Standard_B1ls)
-- ✅ **Download config** - WireGuard configuration downloads as `.conf` file
-- ✅ **CI/CD ready** - GitHub Actions workflows included
+- ✅ **One-click deployment** - Deploy all infrastructure via GitHub Actions
+- ✅ **QR code access** - Scan to configure WireGuard on mobile
+- ✅ **Auto-shutdown** - VMs automatically terminate after 30 minutes
+- ✅ **Access control** - Restricted to authorized users only
+- ✅ **West Europe** - VMs deployed in Azure West Europe region
+- ✅ **Destroy workflow** - Clean up all resources with one command
 
-## Migration Status
+## Quick Start
 
-**Current Architecture**: Azure Static Web Apps built-in Functions (Python 3.11) and zero-build SPA frontend (Alpine.js).
+### Prerequisites
 
-This project has been migrated from Azure Durable Functions to a simplified architecture using Azure Static Web Apps built-in Functions. The current implementation:
-- Uses a single Azure Static Web App resource (no separate Function App needed)
-- Implements pass-through async pattern instead of Durable Functions orchestration
-- Maintains the same user experience with simplified backend architecture
-- See [MIGRATION.md](MIGRATION.md) for complete migration details
+1. **Azure Subscription** with permissions to create resources
+2. **GitHub repository** forked from this project
+3. **Service Principal** with Contributor role
 
-**Documentation Updates**: This PR tidies root-level documentation to accurately reflect the current codebase, marks outdated docs (like `frontend/README.md`), and standardizes cross-document references. All setup guides have been updated to reflect the current SWA architecture.
+### Step 1: Create Service Principal
 
-## Prerequisites
-
-### Azure Resources
-1. **Azure Subscription** with permissions to create VMs
-2. **Azure Static Web App** (Free tier works) - includes built-in Functions runtime
-3. **Service Principal** with VM Contributor role (for creating/deleting VMs)
-4. **Resource Group** where VMs will be created
-
-### Required GitHub Secrets
-- `AZURE_STATIC_WEB_APPS_API_TOKEN` - Deployment token for Azure Static Web Apps
-
-### Required SWA App Settings
-- `AZURE_SUBSCRIPTION_ID` - Your Azure subscription ID
-- `AZURE_RESOURCE_GROUP` - Resource group where VMs will be created
-- `AZURE_CLIENT_ID` - Service Principal application ID
-- `AZURE_CLIENT_SECRET` - Service Principal secret
-- `AZURE_TENANT_ID` - Azure AD tenant ID
-- `DRY_RUN` - Set to 'true' for testing without creating real VMs
-
-## Setup Instructions
-
-### Quick Start
-
-1. **Create Resource Group**
-   ```bash
-   az group create --name wireguard-rg --location westeurope
-   ```
-
-2. **Create Azure Static Web App**
-   ```bash
-   az staticwebapp create --name wireguard-spa --resource-group wireguard-rg --location westeurope --sku Free
-   ```
-
-3. **Get Deployment Token**
-   ```bash
-   az staticwebapp secrets list --name wireguard-spa --resource-group wireguard-rg --query "properties.apiKey" -o tsv
-   ```
-   Add this token as `AZURE_STATIC_WEB_APPS_API_TOKEN` in your GitHub repository secrets.
-
-4. **Create Service Principal** (for VM provisioning)
-   ```bash
-   SUBSCRIPTION_ID=$(az account show --query id -o tsv)
-   az ad sp create-for-rbac --name wireguard-spa-vm-provisioner --role "Virtual Machine Contributor" --scopes /subscriptions/$SUBSCRIPTION_ID/resourceGroups/wireguard-rg
-   ```
-   Note the output: `appId`, `password`, `tenant` - you'll need these for app settings.
-
-5. **Configure SWA App Settings**
-   ```bash
-   az staticwebapp appsettings set \
-     --name wireguard-spa \
-     --resource-group wireguard-rg \
-     --setting-names \
-       AZURE_SUBSCRIPTION_ID="<your-subscription-id>" \
-       AZURE_RESOURCE_GROUP="wireguard-rg" \
-       AZURE_CLIENT_ID="<appId-from-step-4>" \
-       AZURE_CLIENT_SECRET="<password-from-step-4>" \
-       AZURE_TENANT_ID="<tenant-from-step-4>" \
-       SSH_PUBLIC_KEY="<your-ssh-public-key>" \
-       DRY_RUN="true"
-   ```
-   **Note**: Start with `DRY_RUN=true` to test without creating real VMs. SSH_PUBLIC_KEY is required for VM provisioning.
-
-6. **Configure Authentication and Invited Users**
-   - In Azure Portal, go to your Static Web App
-   - Go to **Configuration** → **Role management**
-   - Add users to the 'invited' role (only these users can access the app)
-   - Go to **Authentication**
-   - Configure identity providers (Google and/or Microsoft)
-   - Only users assigned the 'invited' role can access the application. The API functions verify this role as defense in depth.
-
-7. **Deploy**
-   - Push to `main` branch or manually trigger the workflow:
-     ```bash
-     # Via GitHub CLI
-     gh workflow run azure-static-web-apps.yml
-     # Or push to main branch
-     git push origin main
-     ```
-
-The GitHub Actions workflow will deploy both the SPA and API functions to Azure Static Web Apps.
-
-## Usage
-
-### For End Users
-
-1. **Navigate** to your Static Web App URL (e.g., `https://wireguard-spa.azurestaticapps.net`)
-2. **Sign in** with Google or Microsoft account (if you're in the allowlist)
-3. **Click** "Request VPN" button
-4. **Wait** for the provisioning to complete (a few minutes in DRY_RUN mode, longer for real VMs)
-5. **Download** the `wireguard.conf` file
-6. **Import** into your WireGuard client (mobile or desktop)
-7. **Connect** and enjoy your VPN!
-
-The VM will automatically be torn down after 30 minutes.
-
-### Testing with DRY_RUN
-
-When `DRY_RUN=true`, the backend:
-- Does NOT create any Azure VMs
-- Returns a sample WireGuard configuration immediately
-- Still creates the orchestration and 30-minute timer
-- Logs teardown actions without actually deleting resources
-
-This is perfect for:
-- Testing the UI flow
-- Validating authentication and authorization
-- Confirming orchestration logic
-- Cost-free development
-
-### Switching to Production Mode
-
-Once you've tested with `DRY_RUN=true`, enable real VM provisioning:
-
-**Via Azure Portal:**
-1. Navigate to your Function App
-2. Go to Configuration → Application Settings
-3. Change `DRY_RUN` to `false`
-4. Click Save and restart the Function App
-
-**Via Azure CLI:**
 ```bash
-az functionapp config appsettings set \
-  --name wireguard-functions \
-  --resource-group wireguard-rg \
-  --settings DRY_RUN="false"
+# Login to Azure
+az login
+
+# Create Service Principal with Contributor role
+az ad sp create-for-rbac \
+  --name "wireguard-vpn-sp" \
+  --role "Contributor" \
+  --scopes "/subscriptions/YOUR_SUBSCRIPTION_ID"
 ```
 
-**Important**: Before switching to production, ensure:
-1. SSH key management is configured (currently uses placeholder)
-2. You've tested the complete flow end-to-end
-3. You understand the cost implications of running VMs
+Note the output:
+- `appId` → AZURE_CLIENT_ID
+- `password` → AZURE_SECRET
+- `tenant` → AZURE_TENANT_ID
 
-## Docker-Based WireGuard Deployment
+### Step 2: Configure GitHub Secrets
 
-The application uses **Flatcar Container Linux** for fast VM provisioning and Docker-based WireGuard deployment:
+In your GitHub repository, go to **Settings → Secrets and variables → Actions** and add:
 
-### How It Works
+| Secret Name | Description |
+|------------|-------------|
+| `AZURE_CLIENT_ID` | Service Principal application ID |
+| `AZURE_SECRET` | Service Principal password |
+| `AZURE_TENANT_ID` | Azure AD tenant ID |
+| `AZURE_SUBSCRIPTION_ID` | Azure subscription ID |
 
-1. **VM Creation**: Azure creates a Flatcar Container Linux VM (Standard_B1ls)
-2. **WireGuard Setup**: Once VM is ready, Azure Run Command executes a script that:
-   - Generates random WireGuard keys on the VM (server and client)
-   - Creates WireGuard server configuration
-   - Pulls and starts `linuxserver/wireguard` Docker container
-   - Outputs client configuration with generated keys
-3. **Config Retrieval**: API extracts the client .conf from Run Command output
-4. **User Access**: Frontend displays the configuration for download
+### Step 3: Deploy Infrastructure
 
-### Key Benefits
+1. Go to **Actions** tab in your repository
+2. Select **"Deploy Ephemeral WireGuard VPN Infrastructure"**
+3. Click **"Run workflow"**
+4. Choose options:
+   - Location: `westeurope` (default)
+   - Resource group: `wireguard-vpn-rg` (default)
+   - Dry run: `false` for real deployment
+5. Click **"Run workflow"**
 
-- **Faster Boot**: Flatcar Container Linux boots faster than traditional Ubuntu
-- **Stateless Keys**: WireGuard keys generated on-VM, not stored in API
-- **Container Isolation**: WireGuard runs in isolated Docker container
-- **Proven Image**: Uses popular `linuxserver/wireguard` container image
-- **Full Automation**: No manual steps required, completely automated
+### Step 4: Configure User Access
 
-### Files Involved
+After deployment, invite the authorized user:
 
-- `api/shared/vm_provisioner.py` - VM creation and Run Command execution
-- `api/shared/wireguard_docker_setup.sh` - Setup script executed on VM
-- Network Security Group automatically allows UDP 51820 for WireGuard
+1. Go to **Azure Portal → Static Web Apps → wireguard-vpn-swa**
+2. Go to **Role management**
+3. Click **Invite**
+4. Enter: `awwsawws@gmail.com`
+5. Select role: `invited`
+6. Click **Generate invitation link**
 
-## Development
+### Step 5: Access the VPN
 
-### Local Development (Functions)
+1. Navigate to the Static Web App URL (shown in deployment output)
+2. Sign in with Google
+3. Click **"Request VPN"**
+4. Scan the QR code with WireGuard mobile app
+5. Connect and enjoy your VPN!
 
-1. **Install Azure Functions Core Tools**
-   ```bash
-   npm install -g azure-functions-core-tools@4
-   ```
+The VM will automatically terminate after 30 minutes.
 
-2. **Create local.settings.json** from template
-   ```bash
-   cp backend/local.settings.json.template backend/local.settings.json
-   # Edit local.settings.json with your values
-   ```
+## Workflows
 
-3. **Install Python dependencies**
-   ```bash
-   cd backend
-   pip install -r requirements.txt
-   ```
+### Deploy Workflow
 
-4. **Run locally**
-   ```bash
-   cd backend
-   func start
-   ```
+Provisions all infrastructure:
+- Azure Resource Group
+- Azure Static Web App
+- Configures app settings for VM provisioning
 
-### Local Development (SPA)
+```bash
+# Run via GitHub Actions UI or CLI
+gh workflow run deploy.yml
+```
 
-Since the SPA uses CDN resources and no build step:
-1. Open `index.html` in a browser
-2. Use a local web server for proper CORS:
-   ```bash
-   python -m http.server 8000
-   ```
-3. Navigate to `http://localhost:8000`
+### Destroy Workflow
 
-**Note**: Authentication won't work locally (requires Azure SWA runtime).
+Removes all infrastructure:
+- Deletes all VMs
+- Deletes network resources
+- Deletes the resource group
 
-## Security Considerations
+```bash
+# Run via GitHub Actions UI
+# Must type "DESTROY" to confirm
+gh workflow run destroy.yml
+```
 
-### Current Implementation (MVP)
-- ✅ Authentication via Azure SWA built-in auth
-- ✅ Email-based allowlist
-- ✅ 30-minute auto-teardown
-- ⚠️ Placeholder SSH key management
-- ⚠️ Basic error handling
-- ⚠️ Minimal logging
+## Architecture
 
-### Production Hardening Needed
-1. **SSH Key Management**
-   - Store private keys in Azure Key Vault
-   - Implement key rotation
-   - Generate ephemeral keys per VM
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                      GitHub Actions                              │
+│  ┌─────────────────┐              ┌─────────────────────────┐  │
+│  │  Deploy         │              │  Destroy                 │  │
+│  │  Workflow       │              │  Workflow                │  │
+│  └────────┬────────┘              └────────────┬────────────┘  │
+└───────────┼────────────────────────────────────┼────────────────┘
+            │                                     │
+            ▼                                     ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                         Azure                                    │
+│                                                                  │
+│  ┌────────────────────────────────────────────────────────────┐ │
+│  │              Resource Group (wireguard-vpn-rg)             │ │
+│  │                                                            │ │
+│  │  ┌──────────────────────────────────────────────────────┐ │ │
+│  │  │           Static Web App (wireguard-vpn-swa)         │ │ │
+│  │  │                                                      │ │ │
+│  │  │  ┌──────────────┐    ┌─────────────────────────┐   │ │ │
+│  │  │  │    SPA       │    │   Python Functions API   │   │ │ │
+│  │  │  │  (QR Code)   │    │   (VM Provisioning)      │   │ │ │
+│  │  │  └──────────────┘    └─────────────────────────┘   │ │ │
+│  │  └──────────────────────────────────────────────────────┘ │ │
+│  │                                                            │ │
+│  │  ┌──────────────────────────────────────────────────────┐ │ │
+│  │  │      WireGuard VM (Ubuntu 22.04, Standard_B1ls)      │ │ │
+│  │  │                                                      │ │ │
+│  │  │  • Auto-created on demand                           │ │ │
+│  │  │  • Auto-shutdown after 30 minutes                   │ │ │
+│  │  │  • WireGuard server with generated keys             │ │ │
+│  │  └──────────────────────────────────────────────────────┘ │ │
+│  └────────────────────────────────────────────────────────────┘ │
+└─────────────────────────────────────────────────────────────────┘
+```
 
-2. **Network Security**
-   - Add Network Security Group rules
-   - Limit WireGuard port access
-   - Consider VNet integration
+## Access Control
 
-3. **Secrets Management**
-   - Move all secrets to Key Vault
-   - Use Managed Identity exclusively
-   - Rotate credentials regularly
+This application is restricted to **awwsawws@gmail.com** only.
 
-4. **Monitoring & Alerts**
-   - Set up Application Insights
-   - Alert on failed provisioning
-   - Track usage metrics
-   - Monitor costs
+- Authentication: Google Sign-In via Azure SWA
+- Authorization: Role-based access with 'invited' role
+- The user must be explicitly invited in Azure Portal
 
-5. **Rate Limiting**
-   - Limit VMs per user
-   - Implement request throttling
-   - Add cooldown periods
+## Auto-Shutdown
 
-6. **Error Handling**
-   - Implement retry logic with exponential backoff
-   - Add circuit breakers
-   - Graceful degradation
-   - Better user feedback
+VMs are configured with 30-minute auto-shutdown:
+- Azure DevTest Labs auto-shutdown schedule
+- Triggers 30 minutes after VM creation
+- No manual cleanup required
 
-7. **Compliance**
-   - Audit logging for all operations
-   - Data retention policies
-   - Privacy considerations
-   - Terms of service
+## Cost Estimate
 
-## Troubleshooting
+- **Static Web App**: Free tier ($0/month)
+- **VM**: Standard_B1ls (~$0.01/hour)
+- **Typical usage**: ~$0.005 per VPN session (30 min)
 
-### Deployment Issues
+## Testing
 
-**Problem**: Workflow fails to deploy
-- Verify `AZURE_STATIC_WEB_APPS_API_TOKEN` secret is set correctly
-- Check workflow logs in GitHub Actions
-- Ensure Python requirements can be installed
+### Dry Run Mode
 
-**Problem**: Authentication failing
-- Verify authentication providers are configured in Azure Portal
-- Confirm email is in ALLOWED_EMAILS app setting
-- Check browser developer console for errors
+Test the workflow without creating real resources:
 
-### API Issues
+1. Run deploy workflow with `dry_run: true`
+2. The UI will work but no actual VM is created
+3. Useful for testing authentication and UI flow
 
-**Problem**: API calls failing
-- Check app settings are configured (ALLOWED_EMAILS, etc.)
-- Review browser console for CORS errors
-- Check SWA logs in Azure Portal
+### Verify Access Control
 
-**Problem**: Job stuck in "pending" or "running"
-- Verify UPSTREAM_BASE_URL and UPSTREAM_API_KEY are set
-- Check upstream provider is responding
-- Review function logs in Azure Portal
-- If using DRY_RUN, ensure it's set to "true"
+1. Try accessing with an unauthorized account → Should show "Access Denied"
+2. Try accessing with awwsawws@gmail.com → Should allow access
+
+### Verify Auto-Shutdown
+
+1. Request a VPN
+2. Note the VM creation time
+3. After 30 minutes, verify VM is terminated in Azure Portal
 
 ## File Structure
 
 ```
 .
-├── index.html                          # SPA entry point
-├── staticwebapp.config.json            # SWA configuration (routing, auth)
 ├── .github/
 │   └── workflows/
-│       └── azure-static-web-apps.yml   # SWA deployment workflow
-├── api/                                # SWA built-in Functions
-│   ├── requirements.txt                # Python dependencies
-│   ├── start_job/                      # POST /api/start_job
-│   │   ├── function.json
-│   │   └── __init__.py
-│   ├── job_status/                     # GET /api/job_status
-│   │   ├── function.json
-│   │   └── __init__.py
+│       ├── deploy.yml              # Deploy infrastructure
+│       └── destroy.yml             # Destroy infrastructure
+├── api/                            # Python Functions API
+│   ├── start_job/                  # POST /api/start_job
+│   ├── job_status/                 # GET /api/job_status
 │   └── shared/
-│       ├── __init__.py
-│       ├── auth.py                     # Authentication utilities
-│       ├── status_store.py             # In-memory job tracking
-│       └── upstream.py                 # Upstream provider integration
+│       ├── vm_provisioner.py       # VM creation logic
+│       └── wireguard_docker_setup.sh
+├── frontend/
+│   └── public/
+│       ├── index.html              # Main SPA with QR code
+│       ├── login.html              # Login page
+│       ├── unauthorized.html       # Access denied page
+│       └── staticwebapp.config.json
 ├── infra/
-│   └── main.bicep                      # Infrastructure as Code (SWA only)
-└── README.md                           # This file
+│   └── main.bicep                  # Infrastructure as Code
+└── README.md                       # This file
 ```
 
-## API Endpoints
+## Troubleshooting
 
-### POST /api/start_job
-Start a new VM and WireGuard provisioning job.
+### Deployment Fails
 
-**Request:**
-```json
-{
-  "action": "provision"  // optional, for extensibility
-}
-```
+1. Check GitHub secrets are configured correctly
+2. Verify Service Principal has Contributor role
+3. Check workflow logs for specific errors
 
-**Response:** 202 Accepted
-```json
-{
-  "operationId": "uuid-here",
-  "status": "accepted",
-  "statusQueryUrl": "/api/job_status?id=uuid-here"
-}
-```
+### Access Denied After Login
 
-**Headers:**
-- `Location: /api/job_status?id=uuid-here`
+1. Ensure user is invited to 'invited' role in Azure Portal
+2. Check SWA authentication configuration
+3. Try clearing browser cookies and signing in again
 
-### GET /api/job_status?id={operationId}
-Check the status of a provisioning job.
+### VM Not Creating
 
-**Response:** 200 OK (in progress)
-```json
-{
-  "operationId": "uuid-here",
-  "status": "running",
-  "progress": "Installing WireGuard...",
-  "createdAt": "2024-10-20T10:00:00Z",
-  "lastUpdatedAt": "2024-10-20T10:02:30Z"
-}
-```
+1. Check Azure subscription quotas
+2. Verify Service Principal credentials in SWA app settings
+3. Check function logs in Azure Portal
 
-**Response:** 200 OK (completed)
-```json
-{
-  "operationId": "uuid-here",
-  "status": "completed",
-  "progress": "Completed successfully",
-  "createdAt": "2024-10-20T10:00:00Z",
-  "lastUpdatedAt": "2024-10-20T10:05:00Z",
-  "result": {
-    "vmName": "wg-vm-12345",
-    "publicIp": "203.0.113.42",
-    "confText": "[Interface]\nPrivateKey=...\n..."
-  }
-}
-```
+### QR Code Not Showing
 
-**Response:** 200 OK (failed)
-```json
-{
-  "operationId": "uuid-here",
-  "status": "failed",
-  "progress": "Failed",
-  "error": "VM creation failed: quota exceeded",
-  "createdAt": "2024-10-20T10:00:00Z",
-  "lastUpdatedAt": "2024-10-20T10:03:00Z"
-}
-```
+1. Wait for VM provisioning to complete
+2. Check browser console for JavaScript errors
+3. Try refreshing the page
 
-## TODO / Future Enhancements
+## Security
 
-### Short Term
-- [ ] Upgrade status store from in-memory to Redis or Azure Table Storage
-- [ ] Add webhook support for upstream provider notifications
-- [ ] Implement proper error handling and retry logic
-- [ ] Add QR code generation for mobile WireGuard config
-
-### Medium Term
-- [ ] Support multiple concurrent VMs per user
-- [ ] Add custom VM lifetime configuration
-- [ ] Add usage analytics and reporting
-- [ ] Admin dashboard for allowlist management
-
-### Long Term
-- [ ] Support for other VPN protocols (OpenVPN, IKEv2)
-- [ ] Multi-cloud support (AWS, GCP)
-- [ ] Web-based VPN client (WebRTC)
-
-## Cost Estimates
-
-### Azure Static Web App
-- **Free tier**: Sufficient for this application
-- **SWA Functions**: First 1M requests/month free
-- **Bandwidth**: First 100 GB/month free
-
-### With DRY_RUN=true
-- **Cost**: ~$0/month (no external resources)
-
-### With real upstream provider
-- Costs depend on your upstream provider's pricing
-- Typical VM costs: ~$0.01-0.08/hour depending on size and region
-- Data egress: Variable based on VPN usage
-
-**Example**: Using Azure VMs via upstream, 10 sessions/day at 30 min each = ~$1-2/month + data egress
+- All secrets stored in GitHub Secrets
+- Service Principal with minimal required permissions
+- Authentication required for all routes
+- VMs auto-terminate to minimize exposure
+- No persistent storage of VPN keys
 
 ## License
 
 MIT License - See LICENSE file for details
-
-## Contributing
-
-Contributions welcome! Please:
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Add tests if applicable
-5. Submit a pull request
-
-## Support
-
-For issues and questions:
-- Open a GitHub issue
-- Check existing issues for solutions
-- Review Azure Functions documentation
-
-## Credits
-
-Built with:
-- [Azure Static Web Apps](https://azure.microsoft.com/services/app-service/static/)
-- [Azure Durable Functions](https://docs.microsoft.com/azure/azure-functions/durable/)
-- [Foundation CSS](https://get.foundation/)
-- [Alpine.js](https://alpinejs.dev/)
-- [WireGuard](https://www.wireguard.com/)

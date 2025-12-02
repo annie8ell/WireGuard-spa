@@ -1,0 +1,230 @@
+name: Deploy Ephemeral WireGuard VPN Infrastructure
+
+on:
+  workflow_dispatch:
+    inputs:
+      location:
+        description: 'Azure region for deployment'
+        required: true
+        default: 'westeurope'
+        type: choice
+        options:
+          - westeurope
+          - eastus
+          - eastus2
+      resource_group:
+        description: 'Resource group name'
+        required: true
+        default: 'wireguard-vpn-rg'
+      dry_run:
+        description: 'Dry run (no real resources created)'
+        required: false
+        default: 'false'
+        type: choice
+        options:
+          - 'true'
+          - 'false'
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  RESOURCE_GROUP: ${{ github.event.inputs.resource_group || 'wireguard-vpn-rg' }}
+  LOCATION: ${{ github.event.inputs.location || 'westeurope' }}
+  PROJECT_NAME: 'wireguard-vpn'
+
+jobs:
+  deploy-infrastructure:
+    name: Deploy Azure Infrastructure
+    runs-on: ubuntu-latest
+    outputs:
+      swa_hostname: ${{ steps.deploy.outputs.swa_hostname }}
+      swa_name: ${{ steps.deploy.outputs.swa_name }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Validate Required Secrets
+        run: |
+          echo "Validating required secrets..."
+          
+          missing_secrets=""
+          
+          if [ -z "${{ secrets.AZURE_CLIENT_ID }}" ]; then
+            missing_secrets="${missing_secrets}AZURE_CLIENT_ID "
+          fi
+          
+          if [ -z "${{ secrets.AZURE_SECRET }}" ]; then
+            missing_secrets="${missing_secrets}AZURE_SECRET "
+          fi
+          
+          if [ -z "${{ secrets.AZURE_TENANT_ID }}" ]; then
+            missing_secrets="${missing_secrets}AZURE_TENANT_ID "
+          fi
+          
+          if [ -z "${{ secrets.AZURE_SUBSCRIPTION_ID }}" ]; then
+            missing_secrets="${missing_secrets}AZURE_SUBSCRIPTION_ID "
+          fi
+          
+          if [ -n "$missing_secrets" ]; then
+            echo "❌ Missing required secrets: $missing_secrets"
+            echo ""
+            echo "Please configure the following secrets in your repository:"
+            echo "  - AZURE_CLIENT_ID: Service Principal application ID"
+            echo "  - AZURE_SECRET: Service Principal password/secret"
+            echo "  - AZURE_TENANT_ID: Azure AD tenant ID"
+            echo "  - AZURE_SUBSCRIPTION_ID: Azure subscription ID"
+            exit 1
+          fi
+          
+          echo "✅ All required secrets are configured"
+
+      - name: Azure Login
+        uses: azure/login@v2
+        with:
+          creds: |
+            {
+              "clientId": "${{ secrets.AZURE_CLIENT_ID }}",
+              "clientSecret": "${{ secrets.AZURE_SECRET }}",
+              "tenantId": "${{ secrets.AZURE_TENANT_ID }}",
+              "subscriptionId": "${{ secrets.AZURE_SUBSCRIPTION_ID }}"
+            }
+
+      - name: Create Resource Group
+        run: |
+          echo "Creating resource group ${{ env.RESOURCE_GROUP }} in ${{ env.LOCATION }}..."
+          az group create \
+            --name "${{ env.RESOURCE_GROUP }}" \
+            --location "${{ env.LOCATION }}" \
+            --tags "purpose=wireguard-vpn" "auto-cleanup=true"
+
+      - name: Deploy Infrastructure (Bicep)
+        id: deploy
+        run: |
+          echo "Deploying infrastructure..."
+          
+          # Deploy Bicep template
+          deployment_output=$(az deployment group create \
+            --resource-group "${{ env.RESOURCE_GROUP }}" \
+            --template-file infra/main.bicep \
+            --parameters projectName="${{ env.PROJECT_NAME }}" \
+            --parameters location="${{ env.LOCATION }}" \
+            --query "properties.outputs" \
+            --output json)
+          
+          echo "Deployment output: $deployment_output"
+          
+          # Extract outputs
+          swa_name=$(echo "$deployment_output" | jq -r '.staticWebAppName.value // empty')
+          swa_hostname=$(echo "$deployment_output" | jq -r '.staticWebAppDefaultHostName.value // empty')
+          
+          echo "swa_name=$swa_name" >> $GITHUB_OUTPUT
+          echo "swa_hostname=$swa_hostname" >> $GITHUB_OUTPUT
+          
+          echo "✅ Infrastructure deployed successfully"
+          echo "   Static Web App: $swa_name"
+          echo "   Hostname: $swa_hostname"
+
+      - name: Get SWA Deployment Token
+        id: swa-token
+        run: |
+          swa_name="${{ steps.deploy.outputs.swa_name }}"
+          
+          echo "Getting deployment token for $swa_name..."
+          
+          # Get the deployment token
+          token=$(az staticwebapp secrets list \
+            --name "$swa_name" \
+            --resource-group "${{ env.RESOURCE_GROUP }}" \
+            --query "properties.apiKey" \
+            --output tsv)
+          
+          # Mask the token in logs
+          echo "::add-mask::$token"
+          
+          echo "swa_token=$token" >> $GITHUB_OUTPUT
+
+      - name: Configure SWA App Settings
+        run: |
+          swa_name="${{ steps.deploy.outputs.swa_name }}"
+          dry_run="${{ github.event.inputs.dry_run || 'false' }}"
+          
+          echo "Configuring app settings for $swa_name..."
+          
+          az staticwebapp appsettings set \
+            --name "$swa_name" \
+            --resource-group "${{ env.RESOURCE_GROUP }}" \
+            --setting-names \
+              "AZURE_SUBSCRIPTION_ID=${{ secrets.AZURE_SUBSCRIPTION_ID }}" \
+              "AZURE_RESOURCE_GROUP=${{ env.RESOURCE_GROUP }}" \
+              "AZURE_CLIENT_ID=${{ secrets.AZURE_CLIENT_ID }}" \
+              "AZURE_CLIENT_SECRET=${{ secrets.AZURE_SECRET }}" \
+              "AZURE_TENANT_ID=${{ secrets.AZURE_TENANT_ID }}" \
+              "DRY_RUN=$dry_run" \
+              "ALLOWED_EMAIL=awwsawws@gmail.com"
+          
+          echo "✅ App settings configured"
+
+      - name: Deploy Static Web App
+        uses: Azure/static-web-apps-deploy@v1
+        with:
+          azure_static_web_apps_api_token: ${{ steps.swa-token.outputs.swa_token }}
+          repo_token: ${{ secrets.GITHUB_TOKEN }}
+          action: 'upload'
+          app_location: 'frontend/public'
+          skip_app_build: true
+          output_location: '.'
+          api_location: 'api'
+
+      - name: Deployment Summary
+        run: |
+          echo ""
+          echo "=========================================="
+          echo "✅ DEPLOYMENT COMPLETED SUCCESSFULLY"
+          echo "=========================================="
+          echo ""
+          echo "📍 Resource Group: ${{ env.RESOURCE_GROUP }}"
+          echo "📍 Location: ${{ env.LOCATION }}"
+          echo "🌐 Static Web App: https://${{ steps.deploy.outputs.swa_hostname }}"
+          echo ""
+          echo "🔐 Access restricted to: awwsawws@gmail.com"
+          echo ""
+          echo "📋 Next Steps:"
+          echo "   1. Configure authentication providers in Azure Portal"
+          echo "   2. Invite awwsawws@gmail.com to the 'invited' role"
+          echo "   3. Navigate to the SWA URL and sign in"
+          echo ""
+          echo "⏱️  VMs will auto-terminate 30 minutes after creation"
+          echo ""
+
+      - name: Generate Job Summary
+        run: |
+          echo "# 🚀 Deployment Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## Infrastructure Details" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Property | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|----------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Resource Group | \`${{ env.RESOURCE_GROUP }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Location | \`${{ env.LOCATION }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Static Web App | \`${{ steps.deploy.outputs.swa_name }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| URL | https://${{ steps.deploy.outputs.swa_hostname }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Dry Run | \`${{ github.event.inputs.dry_run || 'false' }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## Access Control" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "✅ Access restricted to: **awwsawws@gmail.com**" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## Next Steps" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "1. **Configure Authentication**: Go to Azure Portal → Static Web App → Authentication" >> $GITHUB_STEP_SUMMARY
+          echo "2. **Invite User**: Go to Role Management → Invite awwsawws@gmail.com to 'invited' role" >> $GITHUB_STEP_SUMMARY
+          echo "3. **Test Access**: Navigate to the URL and sign in with Google" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## Auto-Cleanup" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "⏱️ WireGuard VMs will automatically terminate **30 minutes** after creation." >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "To manually destroy all resources, run the **Destroy Infrastructure** workflow." >> $GITHUB_STEP_SUMMARY

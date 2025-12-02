@@ -3,12 +3,12 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Sign In - WireGuard On-Demand Launcher</title>
+    <title>Sign In - WireGuard On-Demand VPN</title>
     <!-- Foundation CSS via CDN -->
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/foundation-sites@6.8.1/dist/css/foundation.min.css">
     <style>
         body {
-            background-color: #f4f4f4;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
             display: flex;
             align-items: center;
             justify-content: center;
@@ -17,16 +17,15 @@
             padding: 1rem;
         }
         .container {
-            max-width: 500px;
+            max-width: 450px;
             background: white;
-            border-radius: 8px;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
-            padding: 2rem;
+            border-radius: 12px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+            padding: 2.5rem;
             text-align: center;
         }
         .logo {
-            font-size: 3rem;
-            color: #2199e8;
+            font-size: 4rem;
             margin-bottom: 1rem;
         }
         h1 {
@@ -37,55 +36,59 @@
         .subtitle {
             color: #666;
             margin-bottom: 2rem;
+            font-size: 1rem;
         }
         .provider-button {
             display: block;
             width: 100%;
             margin-bottom: 1rem;
             padding: 1rem;
-            font-size: 1rem;
+            font-size: 1.1rem;
             text-decoration: none;
-            border-radius: 4px;
-            transition: opacity 0.2s;
+            border-radius: 6px;
+            transition: all 0.3s ease;
+            font-weight: 600;
         }
         .provider-button:hover {
-            opacity: 0.9;
-        }
-        .provider-microsoft {
-            background-color: #00a4ef;
-            color: white;
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
         }
         .provider-google {
             background-color: #4285f4;
             color: white;
         }
+        .provider-google:hover {
+            background-color: #3367d6;
+            color: white;
+        }
         .info-box {
-            background-color: #e7f3ff;
-            border: 1px solid #2199e8;
+            background-color: #f0f4ff;
+            border-left: 4px solid #667eea;
             border-radius: 4px;
             padding: 1rem;
             margin-top: 2rem;
             font-size: 0.9rem;
             color: #333;
+            text-align: left;
+        }
+        .info-box strong {
+            color: #667eea;
         }
     </style>
 </head>
 <body>
     <div class="container">
         <div class="logo">🔐</div>
-        <h1>WireGuard On-Demand Launcher</h1>
-        <p class="subtitle">Choose your sign-in method</p>
-        
-        <a href="/.auth/login/aad?post_login_redirect_uri=/" class="provider-button provider-microsoft">
-            <strong>Sign in with Microsoft</strong>
-        </a>
+        <h1>WireGuard VPN</h1>
+        <p class="subtitle">On-Demand Ephemeral VPN Service</p>
         
         <a href="/.auth/login/google?post_login_redirect_uri=/" class="provider-button provider-google">
-            <strong>Sign in with Google</strong>
+            🚀 Sign in with Google
         </a>
         
         <div class="info-box">
-            <strong>Note:</strong> This application is invite-only. You must have the <strong>'invited'</strong> role to access the application.
+            <strong>🔒 Access Restricted</strong><br>
+            This application is invite-only. Only authorized users can access the VPN provisioning service.
         </div>
     </div>
 </body>

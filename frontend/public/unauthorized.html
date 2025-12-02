@@ -3,12 +3,12 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Access Denied - WireGuard On-Demand Launcher</title>
+    <title>Access Denied - WireGuard VPN</title>
     <!-- Foundation CSS via CDN -->
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/foundation-sites@6.8.1/dist/css/foundation.min.css">
     <style>
         body {
-            background-color: #f4f4f4;
+            background: linear-gradient(135deg, #ff6b6b 0%, #ee5a24 100%);
             display: flex;
             align-items: center;
             justify-content: center;
@@ -17,26 +17,26 @@
             padding: 1rem;
         }
         .container {
-            max-width: 600px;
+            max-width: 500px;
             background: white;
-            border-radius: 8px;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
-            padding: 2rem;
+            border-radius: 12px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+            padding: 2.5rem;
             text-align: center;
         }
         .icon {
             font-size: 4rem;
-            color: #cc4b37;
             margin-bottom: 1rem;
         }
         h1 {
             color: #333;
             margin-bottom: 1rem;
+            font-size: 1.8rem;
         }
         p {
             color: #666;
             line-height: 1.6;
-            margin-bottom: 1.5rem;
+            margin-bottom: 1rem;
         }
         .button-group {
             display: flex;
@@ -46,32 +46,41 @@
         }
         .button {
             display: inline-block;
-            padding: 0.75rem 1.5rem;
-            border-radius: 4px;
+            padding: 0.85rem 1.5rem;
+            border-radius: 6px;
             text-decoration: none;
             font-weight: 600;
-            transition: background-color 0.3s;
+            transition: all 0.3s ease;
+        }
+        .button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
         }
         .button-primary {
-            background-color: #2199e8;
+            background-color: #667eea;
             color: white;
         }
         .button-primary:hover {
-            background-color: #1585cf;
+            background-color: #5568d3;
+            color: white;
         }
         .button-secondary {
-            background-color: #767676;
+            background-color: #6c757d;
             color: white;
         }
         .button-secondary:hover {
-            background-color: #5e5e5e;
+            background-color: #545b62;
+            color: white;
         }
-        .button-warning {
-            background-color: #ffae00;
+        .info-box {
+            background-color: #fff3cd;
+            border-left: 4px solid #ffc107;
+            border-radius: 4px;
+            padding: 1rem;
+            margin-top: 1.5rem;
+            font-size: 0.9rem;
             color: #333;
-        }
-        .button-warning:hover {
-            background-color: #cc8b00;
+            text-align: left;
         }
     </style>
 </head>
@@ -80,23 +89,22 @@
         <div class="icon">🚫</div>
         <h1>Access Denied</h1>
         <p>
-            You are signed in, but you do not have permission to access this application.
+            You are signed in, but your account is not authorized to access this application.
         </p>
         <p>
-            This application is invite-only. Only users with the <strong>'invited'</strong> role can access it.
+            This ephemeral VPN service is restricted to authorized users only.
         </p>
-        <p>
-            If you believe you should have access, please contact the administrator to request an invitation.
-        </p>
+        
+        <div class="info-box">
+            <strong>⚠️ Note:</strong> If you believe you should have access, please contact the system administrator to request an invitation to the 'invited' role.
+        </div>
+        
         <div class="button-group">
-            <a href="mailto:your-email@example.com?subject=WireGuard%20Access%20Request" class="button button-primary">
-                Contact Administrator
-            </a>
-            <a href="https://github.com/annie8ell/WireGuard-spa#readme" class="button button-warning" target="_blank">
-                View Documentation
+            <a href="/.auth/login/google?post_login_redirect_uri=/" class="button button-primary">
+                🔄 Try Different Account
             </a>
             <a href="/.auth/logout" class="button button-secondary">
-                Sign Out
+                🚪 Sign Out
             </a>
         </div>
     </div>
