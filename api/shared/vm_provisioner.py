@@ -697,10 +697,13 @@ class VMProvisioner:
             # The schedule name must be in format: shutdown-computevm-{vmname}
             schedule_name = f"shutdown-computevm-{vm_name}"
             
-            # Get access token
-            from azure.identity import ClientSecretCredential
-            credential = self.credential
-            token = credential.get_token("https://management.azure.com/.default")
+            # Get access token with error handling
+            try:
+                credential = self.credential
+                token = credential.get_token("https://management.azure.com/.default")
+            except Exception as auth_error:
+                logger.warning(f"Failed to get authentication token for auto-shutdown: {str(auth_error)}")
+                return False
             
             # Create the auto-shutdown schedule resource
             schedule_resource = {
@@ -731,7 +734,8 @@ class VMProvisioner:
                 "Content-Type": "application/json"
             }
             
-            response = requests.put(url, headers=headers, json=schedule_resource)
+            # Set timeout to prevent hanging (30 seconds)
+            response = requests.put(url, headers=headers, json=schedule_resource, timeout=30)
             
             if response.status_code in [200, 201]:
                 logger.info(f"Auto-shutdown configured for VM {vm_name} - will shut down at {shutdown_time_str} UTC")

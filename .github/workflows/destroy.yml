@@ -208,8 +208,8 @@ jobs:
         run: |
           echo "Waiting for resource group deletion to complete..."
           
-          # Wait up to 10 minutes for deletion
-          max_attempts=60
+          # Wait up to 10 minutes for deletion with 30-second intervals
+          max_attempts=20
           attempt=0
           
           while [ $attempt -lt $max_attempts ]; do
@@ -221,7 +221,7 @@ jobs:
             fi
             
             echo "Waiting for deletion... (attempt $((attempt + 1))/$max_attempts)"
-            sleep 10
+            sleep 30
             attempt=$((attempt + 1))
           done
           
