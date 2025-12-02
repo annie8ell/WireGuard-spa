@@ -1,6 +1,6 @@
 # Quick Setup Guide: Automated Credentials Configuration for GitHub Codespaces
 
-This guide provides a streamlined, automated approach to set up all required GitHub secrets and Azure permissions for the WireGuard SPA deployment from GitHub Codespaces (ideal for iPad or browser-based workflows).
+This guide provides a streamlined, automated approach to set up all required GitHub secrets and Azure permissions for the WireGuard SPA deployment from GitHub Codespaces or any local dev environment.
 
 > **Setup Path**: This guide covers the **automated** credentials configuration approach. If you prefer manual setup or need more control, see [SETUP-SECRETS-AND-ROLES.md](SETUP-SECRETS-AND-ROLES.md) for detailed manual instructions.
 
@@ -21,7 +21,7 @@ This guide provides automation scripts that:
 
 ### Step 1: Install Required Tools
 
-In your Codespace terminal, run:
+In your Codespace or local terminal, run:
 
 ```bash
 chmod +x scripts/install-tools.sh
@@ -38,14 +38,10 @@ chmod +x scripts/install-tools.sh
 #### Authenticate to Azure
 
 ```bash
-# Login to Azure (this will open a browser)
 az login
-
-# Select your subscription (if you have multiple)
+# If you have multiple subscriptions:
 az account list --output table
 az account set --subscription "<YOUR_SUBSCRIPTION_ID>"
-
-# Verify you're logged in
 az account show
 ```
 
@@ -54,69 +50,49 @@ az account show
 The default `GITHUB_TOKEN` in Codespaces has read-only access and **cannot manage repository secrets**. You need to login with proper credentials:
 
 ```bash
-# Save the original token (to restore later)
 export ORIGINAL_GITHUB_TOKEN="$GITHUB_TOKEN"
-
-# Unset the read-only token
 unset GITHUB_TOKEN
-
-# Login with device code flow (provides full access)
 gh auth login --web
-
-# Verify you have the right permissions
 gh auth status
 ```
 
-**After running the setup script** (Step 3), you can restore the original token:
+After running the setup script, restore the original token if needed:
 ```bash
-# Restore the original Codespaces token
 export GITHUB_TOKEN="$ORIGINAL_GITHUB_TOKEN"
-
-# Verify restoration
 gh auth status
 ```
 
 ### Step 3: Run Automated Setup
 
-**Important:** Ensure you've authenticated with `gh auth login --web` (Step 2) before running this script, as it needs permissions to manage repository secrets.
+**Important:** Ensure you've authenticated with `gh auth login --web` before running this script, as it needs permissions to manage repository secrets.
 
-Now run the main setup script that does everything automatically:
+Run the main setup script:
 
 ```bash
-# Make the script executable
 chmod +x scripts/setup-all-secrets.sh
-
-# Run the setup script
-./scripts/setup-all-secrets.sh
-
-# The script will:
-# 1. Discover your Azure resources (Static Web App, Resource Group)
-# 2. Create/verify the Service Principal with appropriate permissions for VM provisioning
-# 3. Retrieve the Static Web App deployment token
-# 4. Set GitHub repository secret automatically
-# 5. Validate the configuration
+./scripts/setup-all-secrets.sh --non-interactive
 ```
+
+**What this script does:**
+1. Discovers your Azure Static Web App and resource group
+2. Creates or verifies Service Principal with VM Contributor and Network Contributor roles
+3. Retrieves the SWA deployment token
+4. Sets GitHub secrets (`AZURE_STATIC_WEB_APPS_API_TOKEN`, `AZURE_CREDENTIALS`)
+5. Validates configuration
 
 #### Script Options
 
-The setup script supports several options for flexibility:
-
 ```bash
-# Interactive mode (default) - prompts for confirmation
+# Interactive mode (default)
 ./scripts/setup-all-secrets.sh
-
-# Non-interactive mode - uses defaults or discovered values
+# Non-interactive mode (recommended for CI/dev)
 ./scripts/setup-all-secrets.sh --non-interactive
-
 # Specify resource group explicitly
 ./scripts/setup-all-secrets.sh --resource-group wireguard-spa-rg
-
 # Override/force update existing secrets
 ./scripts/setup-all-secrets.sh --force
-
 # Dry run - show what would be done without making changes
 ./scripts/setup-all-secrets.sh --dry-run
-
 # Get help
 ./scripts/setup-all-secrets.sh --help
 ```
@@ -125,45 +101,35 @@ The setup script supports several options for flexibility:
 
 The automated setup script configures the following:
 
-### GitHub Repository Secret
+### GitHub Repository Secrets
 
 | Secret Name | Description |
 |------------|-------------|
 | `AZURE_STATIC_WEB_APPS_API_TOKEN` | Static Web App deployment token |
+| `AZURE_CREDENTIALS` | Service Principal credentials (for CI/CD workflows, not used by SWA Functions) |
 
-> **Note**: With the current SWA built-in Functions architecture, only the SWA deployment token is needed for GitHub Actions. The Service Principal credentials for VM provisioning are configured as **SWA app settings** (not GitHub secrets).
+> **Note**: For SWA built-in Functions, Service Principal credentials are configured as SWA app settings (not GitHub secrets). `AZURE_CREDENTIALS` is only needed for CI/CD workflows that provision infrastructure.
 
 ### Azure Permissions
 
 The script automatically configures:
 
-1. **Service Principal** with VM Contributor role on your resource group (configured as SWA app settings)
+1. **Service Principal** with VM Contributor and Network Contributor roles on your resource group (configured as SWA app settings)
 
 ## Verification
 
 After running the setup script, verify everything is configured:
 
 ```bash
-# Run the validation workflow
+# Run the validation workflow (if present)
 gh workflow run validate-secrets.yml
-
-# Check workflow status
 gh run list --workflow=validate-secrets.yml --limit 1
-
-# View the results
 gh run view --web
-```
 
-Or manually verify:
-
-```bash
-# Check GitHub secret (doesn't show value, just confirms it exists)
+# Or manually verify:
 gh secret list | grep AZURE_STATIC_WEB_APPS_API_TOKEN
-
-# Check Azure Service Principal
+gh secret list | grep AZURE_CREDENTIALS
 az ad sp list --display-name "wireguard-spa-vm-provisioner" --query '[].{Name:displayName, AppId:appId}' -o table
-
-# Check SWA app settings (Service Principal credentials)
 SWA_NAME=$(az staticwebapp list --query '[0].name' -o tsv)
 az staticwebapp appsettings list --name $SWA_NAME --resource-group <YOUR_RG> --output table
 ```
@@ -255,18 +221,8 @@ The automated setup script (`setup-all-secrets.sh`) can leverage the existing he
 
 After completing this setup:
 
-1. **Deploy the Application**:
-   ```bash
-   # Deploy via GitHub Actions
-   gh workflow run azure-static-web-apps.yml
-   
-   # Or push to main branch
-   git push origin main
-   ```
-
-2. **Configure SWA App Settings**:
-   - Navigate to Azure Portal → Your Static Web App → Configuration
-   - Add Service Principal credentials for VM provisioning:
+1. **Configure SWA App Settings**:
+   - In Azure Portal → Your Static Web App → Configuration → Application settings, add:
      - `AZURE_SUBSCRIPTION_ID`
      - `AZURE_RESOURCE_GROUP`
      - `AZURE_CLIENT_ID`
@@ -274,10 +230,15 @@ After completing this setup:
      - `AZURE_TENANT_ID`
      - `DRY_RUN=true` (for testing)
 
-3. **Configure Authentication** in your Static Web App:
-   - Navigate to Azure Portal → Your Static Web App → Authentication
-   - Add Google and/or Microsoft identity providers
-   - Assign users to 'invited' role in Role management
+2. **Configure Authentication & Roles**:
+   - In Azure Portal → Static Web App → Authentication, add Google/Microsoft providers.
+   - In Role management, assign users to the 'invited' role.
+
+3. **Deploy the Application**:
+   - Push to main branch or run:
+     ```bash
+     gh workflow run azure-static-web-apps.yml
+     ```
 
 4. **Test with DRY_RUN mode first**:
    - Set `DRY_RUN=true` in SWA app settings

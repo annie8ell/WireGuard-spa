@@ -77,77 +77,61 @@ This project has been migrated from Azure Durable Functions to a simplified arch
 
 ### Quick Start
 
-1. **Create Azure Static Web App**
+1. **Create Resource Group**
    ```bash
-   az staticwebapp create \
-     --name wireguard-spa \
-     --resource-group wireguard-rg \
-     --location westeurope \
-     --sku Free
+   az group create --name wireguard-rg --location westeurope
    ```
 
-2. **Get Deployment Token**
+2. **Create Azure Static Web App**
    ```bash
-   az staticwebapp secrets list \
-     --name wireguard-spa \
-     --resource-group wireguard-rg \
-     --query "properties.apiKey" -o tsv
+   az staticwebapp create --name wireguard-spa --resource-group wireguard-rg --location westeurope --sku Free
    ```
-   
-   Add this token as `AZURE_STATIC_WEB_APPS_API_TOKEN` in GitHub Secrets.
 
-3. **Create Service Principal** (for VM provisioning)
+3. **Get Deployment Token**
    ```bash
-   az ad sp create-for-rbac \
-     --name wireguard-spa-vm-provisioner \
-     --role "Virtual Machine Contributor" \
-     --scopes /subscriptions/<YOUR_SUBSCRIPTION_ID>/resourceGroups/wireguard-rg
+   az staticwebapp secrets list --name wireguard-spa --resource-group wireguard-rg --query "properties.apiKey" -o tsv
    ```
-   
-   Note the output: `appId`, `password`, `tenant` - you'll need these for app settings.
+   Add this token as `AZURE_STATIC_WEB_APPS_API_TOKEN` in your GitHub repository secrets.
 
-4. **Configure App Settings**
-   
-   In Azure Portal or via CLI:
+4. **Create Service Principal** (for VM provisioning)
    ```bash
    SUBSCRIPTION_ID=$(az account show --query id -o tsv)
-   
+   az ad sp create-for-rbac --name wireguard-spa-vm-provisioner --role "Virtual Machine Contributor" --scopes /subscriptions/$SUBSCRIPTION_ID/resourceGroups/wireguard-rg
+   ```
+   Note the output: `appId`, `password`, `tenant` - you'll need these for app settings.
+
+5. **Configure SWA App Settings**
+   ```bash
    az staticwebapp appsettings set \
      --name wireguard-spa \
      --resource-group wireguard-rg \
      --setting-names \
-       AZURE_SUBSCRIPTION_ID="$SUBSCRIPTION_ID" \
+       AZURE_SUBSCRIPTION_ID="<your-subscription-id>" \
        AZURE_RESOURCE_GROUP="wireguard-rg" \
-       AZURE_CLIENT_ID="<appId from step 3>" \
-       AZURE_CLIENT_SECRET="<password from step 3>" \
-       AZURE_TENANT_ID="<tenant from step 3>" \
+       AZURE_CLIENT_ID="<appId-from-step-4>" \
+       AZURE_CLIENT_SECRET="<password-from-step-4>" \
+       AZURE_TENANT_ID="<tenant-from-step-4>" \
+       SSH_PUBLIC_KEY="<your-ssh-public-key>" \
        DRY_RUN="true"
    ```
-   
-   **Note**: Start with `DRY_RUN=true` to test without creating real VMs.
+   **Note**: Start with `DRY_RUN=true` to test without creating real VMs. SSH_PUBLIC_KEY is required for VM provisioning.
 
-5. **Configure Authentication and Invited Users**
-   
-   In Azure Portal:
-   - Navigate to your Static Web App
+6. **Configure Authentication and Invited Users**
+   - In Azure Portal, go to your Static Web App
    - Go to **Configuration** → **Role management**
-   - Add users to the 'invited' role (this is the only role allowed to access the app)
+   - Add users to the 'invited' role (only these users can access the app)
    - Go to **Authentication**
    - Configure identity providers (Google and/or Microsoft)
-   
-   **Important**: Only users assigned the 'invited' role can access the application. 
-   The API functions verify this role as defense in depth.
+   - Only users assigned the 'invited' role can access the application. The API functions verify this role as defense in depth.
 
-6. **Deploy**
-   
-   Push to `main` branch or manually trigger the workflow:
-   ```bash
-   # Via GitHub CLI
-   gh workflow run azure-static-web-apps.yml
-   
-   # Or push to main branch
-   git push origin main
-   ```
+7. **Deploy**
+   - Push to `main` branch or manually trigger the workflow:
+     ```bash
+     # Via GitHub CLI
+     gh workflow run azure-static-web-apps.yml
+     # Or push to main branch
+     git push origin main
+     ```
 
 The GitHub Actions workflow will deploy both the SPA and API functions to Azure Static Web Apps.
 
