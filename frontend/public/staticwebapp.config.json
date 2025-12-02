@@ -4,6 +4,14 @@
   },
   "routes": [
     {
+      "route": "/login.html",
+      "allowedRoles": ["anonymous", "authenticated"]
+    },
+    {
+      "route": "/unauthorized.html",
+      "allowedRoles": ["anonymous", "authenticated"]
+    },
+    {
       "route": "/",
       "allowedRoles": ["invited"]
     },
@@ -14,6 +22,10 @@
     {
       "route": "/api/*",
       "allowedRoles": ["invited"]
+    },
+    {
+      "route": "/*",
+      "allowedRoles": ["invited"]
     }
   ],
   "responseOverrides": {
@@ -22,7 +34,7 @@
       "statusCode": 302
     },
     "403": {
-      "redirect": "/unauthorized",
+      "redirect": "/unauthorized.html",
       "statusCode": 302
     }
   },

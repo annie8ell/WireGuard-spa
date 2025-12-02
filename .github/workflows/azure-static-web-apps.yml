@@ -22,7 +22,7 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
         with:
           submodules: true
 
@@ -63,8 +63,8 @@ jobs:
           echo "   - AZURE_TENANT_ID: Azure AD tenant ID"
           echo "   - DRY_RUN: Set to 'true' for testing without real provisioning"
           echo ""
-          echo "🔐 Remember to configure user roles:"
-          echo "   - Assign users to 'invited' role in Azure Portal -> Role management"
+          echo "🔐 Access restricted to: awwsawws@gmail.com"
+          echo "   Ensure user is invited to 'invited' role in Azure Portal"
 
   close_pull_request:
     if: github.event_name == 'pull_request' && github.event.action == 'closed'

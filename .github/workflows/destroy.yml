@@ -1,0 +1,265 @@
+name: Destroy WireGuard VPN Infrastructure
+
+on:
+  workflow_dispatch:
+    inputs:
+      resource_group:
+        description: 'Resource group to destroy'
+        required: true
+        default: 'wireguard-vpn-rg'
+      confirm_destroy:
+        description: 'Type "DESTROY" to confirm deletion'
+        required: true
+        default: ''
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  RESOURCE_GROUP: ${{ github.event.inputs.resource_group }}
+
+jobs:
+  validate-destroy:
+    name: Validate Destroy Request
+    runs-on: ubuntu-latest
+    outputs:
+      confirmed: ${{ steps.check.outputs.confirmed }}
+
+    steps:
+      - name: Validate Confirmation
+        id: check
+        run: |
+          if [ "${{ github.event.inputs.confirm_destroy }}" != "DESTROY" ]; then
+            echo "❌ Destroy not confirmed. You must type 'DESTROY' to proceed."
+            echo "confirmed=false" >> $GITHUB_OUTPUT
+            exit 1
+          fi
+          
+          echo "✅ Destroy confirmed"
+          echo "confirmed=true" >> $GITHUB_OUTPUT
+
+  destroy-infrastructure:
+    name: Destroy Azure Infrastructure
+    needs: validate-destroy
+    if: needs.validate-destroy.outputs.confirmed == 'true'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Validate Required Secrets
+        run: |
+          echo "Validating required secrets..."
+          
+          missing_secrets=""
+          
+          if [ -z "${{ secrets.AZURE_CLIENT_ID }}" ]; then
+            missing_secrets="${missing_secrets}AZURE_CLIENT_ID "
+          fi
+          
+          if [ -z "${{ secrets.AZURE_SECRET }}" ]; then
+            missing_secrets="${missing_secrets}AZURE_SECRET "
+          fi
+          
+          if [ -z "${{ secrets.AZURE_TENANT_ID }}" ]; then
+            missing_secrets="${missing_secrets}AZURE_TENANT_ID "
+          fi
+          
+          if [ -z "${{ secrets.AZURE_SUBSCRIPTION_ID }}" ]; then
+            missing_secrets="${missing_secrets}AZURE_SUBSCRIPTION_ID "
+          fi
+          
+          if [ -n "$missing_secrets" ]; then
+            echo "❌ Missing required secrets: $missing_secrets"
+            exit 1
+          fi
+          
+          echo "✅ All required secrets are configured"
+
+      - name: Azure Login
+        uses: azure/login@v2
+        with:
+          creds: |
+            {
+              "clientId": "${{ secrets.AZURE_CLIENT_ID }}",
+              "clientSecret": "${{ secrets.AZURE_SECRET }}",
+              "tenantId": "${{ secrets.AZURE_TENANT_ID }}",
+              "subscriptionId": "${{ secrets.AZURE_SUBSCRIPTION_ID }}"
+            }
+
+      - name: List Resources to Delete
+        id: list
+        run: |
+          echo "Listing resources in resource group ${{ env.RESOURCE_GROUP }}..."
+          
+          # Check if resource group exists
+          rg_exists=$(az group exists --name "${{ env.RESOURCE_GROUP }}")
+          
+          if [ "$rg_exists" != "true" ]; then
+            echo "⚠️ Resource group ${{ env.RESOURCE_GROUP }} does not exist"
+            echo "rg_exists=false" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          
+          echo "rg_exists=true" >> $GITHUB_OUTPUT
+          
+          # List all resources
+          echo "Resources to be deleted:"
+          az resource list \
+            --resource-group "${{ env.RESOURCE_GROUP }}" \
+            --output table
+          
+          # Count resources
+          resource_count=$(az resource list \
+            --resource-group "${{ env.RESOURCE_GROUP }}" \
+            --query "length(@)")
+          
+          echo "resource_count=$resource_count" >> $GITHUB_OUTPUT
+          echo ""
+          echo "Total resources to delete: $resource_count"
+
+      - name: Delete WireGuard VMs First
+        if: steps.list.outputs.rg_exists == 'true'
+        run: |
+          echo "Deleting WireGuard VMs..."
+          
+          # Find and delete VMs with wireguard tags
+          vms=$(az vm list \
+            --resource-group "${{ env.RESOURCE_GROUP }}" \
+            --query "[?tags.purpose=='wireguard-vpn'].name" \
+            --output tsv)
+          
+          if [ -n "$vms" ]; then
+            for vm in $vms; do
+              echo "Deleting VM: $vm"
+              az vm delete \
+                --resource-group "${{ env.RESOURCE_GROUP }}" \
+                --name "$vm" \
+                --yes \
+                --no-wait
+            done
+            
+            echo "VM deletion initiated"
+          else
+            echo "No WireGuard VMs found"
+          fi
+
+      - name: Delete All NICs
+        if: steps.list.outputs.rg_exists == 'true'
+        run: |
+          echo "Deleting network interfaces..."
+          
+          nics=$(az network nic list \
+            --resource-group "${{ env.RESOURCE_GROUP }}" \
+            --query "[].name" \
+            --output tsv)
+          
+          if [ -n "$nics" ]; then
+            for nic in $nics; do
+              echo "Deleting NIC: $nic"
+              az network nic delete \
+                --resource-group "${{ env.RESOURCE_GROUP }}" \
+                --name "$nic" \
+                --no-wait || true
+            done
+          else
+            echo "No NICs found"
+          fi
+
+      - name: Delete All Public IPs
+        if: steps.list.outputs.rg_exists == 'true'
+        run: |
+          echo "Deleting public IP addresses..."
+          
+          public_ips=$(az network public-ip list \
+            --resource-group "${{ env.RESOURCE_GROUP }}" \
+            --query "[].name" \
+            --output tsv)
+          
+          if [ -n "$public_ips" ]; then
+            for ip in $public_ips; do
+              echo "Deleting Public IP: $ip"
+              az network public-ip delete \
+                --resource-group "${{ env.RESOURCE_GROUP }}" \
+                --name "$ip" \
+                --no-wait || true
+            done
+          else
+            echo "No public IPs found"
+          fi
+
+      - name: Delete Resource Group
+        if: steps.list.outputs.rg_exists == 'true'
+        run: |
+          echo "Deleting resource group ${{ env.RESOURCE_GROUP }}..."
+          echo "This will delete ALL resources in the group."
+          
+          az group delete \
+            --name "${{ env.RESOURCE_GROUP }}" \
+            --yes \
+            --no-wait
+          
+          echo "Resource group deletion initiated (async)"
+
+      - name: Wait for Deletion
+        if: steps.list.outputs.rg_exists == 'true'
+        run: |
+          echo "Waiting for resource group deletion to complete..."
+          
+          # Wait up to 10 minutes for deletion with 30-second intervals
+          max_attempts=20
+          attempt=0
+          
+          while [ $attempt -lt $max_attempts ]; do
+            rg_exists=$(az group exists --name "${{ env.RESOURCE_GROUP }}")
+            
+            if [ "$rg_exists" != "true" ]; then
+              echo "✅ Resource group deleted successfully"
+              exit 0
+            fi
+            
+            echo "Waiting for deletion... (attempt $((attempt + 1))/$max_attempts)"
+            sleep 30
+            attempt=$((attempt + 1))
+          done
+          
+          echo "⚠️ Deletion still in progress (may take additional time)"
+
+      - name: Destruction Summary
+        run: |
+          echo ""
+          echo "=========================================="
+          echo "🗑️ DESTRUCTION COMPLETED"
+          echo "=========================================="
+          echo ""
+          echo "📍 Resource Group: ${{ env.RESOURCE_GROUP }}"
+          echo "📊 Resources Deleted: ${{ steps.list.outputs.resource_count || 'N/A' }}"
+          echo ""
+          echo "All infrastructure has been cleaned up."
+          echo ""
+
+      - name: Generate Job Summary
+        run: |
+          echo "# 🗑️ Infrastructure Destruction Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## Deleted Resources" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Property | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|----------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Resource Group | \`${{ env.RESOURCE_GROUP }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Resources Count | ${{ steps.list.outputs.resource_count || 'N/A' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Status | ✅ Deleted |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## What Was Deleted" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- Azure Static Web App" >> $GITHUB_STEP_SUMMARY
+          echo "- WireGuard VMs (if any)" >> $GITHUB_STEP_SUMMARY
+          echo "- Virtual Networks" >> $GITHUB_STEP_SUMMARY
+          echo "- Network Security Groups" >> $GITHUB_STEP_SUMMARY
+          echo "- Network Interfaces" >> $GITHUB_STEP_SUMMARY
+          echo "- Public IP Addresses" >> $GITHUB_STEP_SUMMARY
+          echo "- OS Disks" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "All resources in the resource group have been permanently deleted." >> $GITHUB_STEP_SUMMARY
